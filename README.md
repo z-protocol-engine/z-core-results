@@ -23,50 +23,35 @@ All results verified with Princeton's official SWE-bench harness. Full JSON logs
 | System | Score | Team | Funding |
 |--------|-------|------|---------|
 | **Z-CORE** | **90.2%** | **1 person** | **$0** |
-| Claude Opus 4.6 | 80.9% | Anthropic | - |
+| Claude Opus 4.5 (best public) | 80.9% | Anthropic | - |
 | Sonar Foundation Agent | 79.2% | Team | Funded |
 | GPT-5.4 | 77.2% | OpenAI | - |
 | DARPA AIxCC (best team) | 61% | Teams | $2B+ |
 | Cognition Devin | ~49% | 50+ eng | $175M |
 
-## Architecture
-```
-Bug Report -> CLASSIFY -> DISCOVER -> SOLVE -> APPLY -> VERIFIED
-```
+## What is Z-CORE?
 
-**6 deterministic bricks, zero LLM calls for classification:**
+A proprietary software layer that sits between any LLM API and a codebase. It transforms how the model sees the problem and what it does with the answer.
 
-- **Classifier:** 127 regex patterns, 16 problem types, 6-layer scoring
-- **Context Discovery:** 7 strategies find relevant source files in the repo
-- **Solver:** Single calibrated API call with specialist prompt
-- **Cascade Matcher:** Exact -> Strip WS -> Indent-Agnostic -> Fuzzy (>=0.85)
-- **Verifier:** Princeton harness (fail-to-pass tests in Docker)
-- **Emitter:** predictions.jsonl + logs
+**The insight:** the LLM is a commodity. A raw API call scores ~10%. The same API through Z-CORE scores 90.2%. The difference is 100% orchestration.
 
 **Key properties:**
-- Model-agnostic (Claude, GPT-4, Grok, Mistral, Llama, any LLM)
-- Benchmark-agnostic (SWE-bench, HumanEval, MATH, GPQA - same kernel)
-- Deterministic, auditable, sovereign-ready (runs on-premise with local LLM)
-
-## The Insight
-
-The LLM is a commodity. A raw API call scores ~10%. The same API through Z-CORE scores 90.2%. The difference is 100% orchestration: what you send (context), how you ask (specialist prompt), what you do with the answer (cascade matching).
+- Model-agnostic (works with any LLM — Claude, GPT, Grok, Mistral, Llama, open-source)
+- Deterministic and auditable
+- Single API call per bug
+- Sovereign-ready: runs fully on-premise with local LLMs. Zero data leaves the building.
 
 ## Builder
 
 **Zakaria Charfaoui** - Agadir, Morocco
 - Zero coding experience before December 2025
 - 15 years B2B enterprise sales (medical/pharma) + Nasdaq/Treasury trading
-- Built Z-CORE in 90 days applying trading logic to bug resolution
+- Built Z-CORE in 90 days
 - Contact: zakaria.charfaoui@gmail.com | [LinkedIn](https://linkedin.com/in/charfaoui)
 
-## FAQ
+## Inquiries
 
-**Q: Source code?** Proprietary. This repo contains results and architecture only. Available under NDA.
-
-**Q: Why not on the official leaderboard?** Requires academic sponsorship. This repo is the public proof.
-
-**Q: Reproducible?** Every RESOLVED was verified by Princeton's harness in isolated Docker containers.
+Source code and technical architecture available under NDA for serious inquiries only.
 
 ---
 *The orchestration layer is the moat, not the model.*
