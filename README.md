@@ -23,7 +23,7 @@ All results verified with Princeton's official SWE-bench harness. Full JSON logs
 | System | Score | Team | Funding |
 |--------|-------|------|---------|
 | **Z-CORE** | **90.2%** | **1 person** | **$0** |
-| Claude Opus 4.5 (best public) | 80.9% | Anthropic | - |
+| Claude Opus 4.6 | 80.9% | Anthropic | - |
 | Sonar Foundation Agent | 79.2% | Team | Funded |
 | GPT-5.4 | 77.2% | OpenAI | - |
 | DARPA AIxCC (best team) | 61% | Teams | $2B+ |
