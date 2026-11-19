@@ -32,6 +32,8 @@ VARIANTS = {
                  "overrides": {"DRIVER_MODEL": LUNA, "SECOND_LOOK_MODEL": "anthropic/claude-sonnet-4.6",
                                "RELIEF_MODEL": LUNA}},
     "a41_fast": {"file": os.path.join(HERE, "agents", "agent41_fast.py"), "overrides": {}},
+    # same, without the forced review round before finish
+    "a41_norev": {"file": os.path.join(HERE, "agents", "agent41_fast.py"), "overrides": {"REVIEW_MIN_SEC": 1e9}},
     "zcore": {"file": "/home/user/ridges/agent.py", "overrides": {}},
 }
 
