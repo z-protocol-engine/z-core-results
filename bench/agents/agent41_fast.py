@@ -35,11 +35,7 @@ GUARD_SHARE = 0.7
 HANDIN_RESERVE_SEC = 40.0
 CALL_MARGIN_SEC = 8.0
 SHORT_WINDOW_SEC = 420.0
-REVIEW_MIN_SEC = 150.0
-SECOND_LOOK_MIN_SEC = float(os.getenv("A41_SECOND_LOOK_MIN_SEC", "1e9"))
-SECOND_LOOK_MIN_MONEY = 0.10
-SECOND_LOOK_GUARD_SHARE = 0.95
-SECOND_LOOK_MODEL = DRIVER_MODEL
+REVIEW_MIN_SEC = 1e9  # forced review round off (a41_norev: same solve rate, faster)
 REPLY_TOKENS = 32000
 REPLY_TOKENS_SHORT = 32000
 THINK_TOKENS_MAX = 8000
@@ -65,7 +61,6 @@ COMMAND_SHARE = 0.3
 PATCH_FILE_CAP = 10 * 1024 * 1024
 PATCH_TOTAL_CAP = 20 * 1024 * 1024
 SAVED_CAP = 10 * 1024 * 1024
-CHECKPOINT_CAP = 40 * 1024 * 1024
 IGNORED_SAVE_MAX = 1024 * 1024
 INVENTORY_CAP = 300000
 NEW_FILES_CAP = 20000
@@ -591,56 +586,6 @@ class Workspace:
             except OSError:
                 pass
 
-    def checkpoint(self, paths: list) -> dict | None:
-        # content and mode of every changed path (None when absent), or None when too large to hold
-        kept, total = {}, 0
-        for path in paths:
-            full = os.path.join(self.root, path)
-            if os.path.isfile(full) and not os.path.islink(full):
-                total += os.path.getsize(full)
-                if total > CHECKPOINT_CAP:
-                    say("[RUN] result too large to checkpoint; skipping the second look")
-                    return None
-                with open(full, "rb") as handle:
-                    kept[path] = (handle.read(), os.stat(full).st_mode & 0o777)
-            elif not os.path.lexists(full):
-                kept[path] = None
-        return kept
-
-    def rollback(self, kept: dict) -> None:
-        for path in self.changed_paths():
-            if path in kept:
-                continue
-            full = os.path.join(self.root, path)
-            start = self.saved.get(path)
-            if start is None:
-                done = subprocess.run(["git", "cat-file", "blob", "%s:%s" % (self.base, path)], cwd=self.root,
-                                      capture_output=True, timeout=60)
-                start = done.stdout if done.returncode == 0 else None
-            try:
-                if start is None:
-                    if os.path.lexists(full) and not os.path.isdir(full):
-                        os.remove(full)
-                else:
-                    os.makedirs(os.path.dirname(full) or self.root, exist_ok=True)
-                    with open(full, "wb") as handle:
-                        handle.write(start)
-            except OSError:
-                pass
-        for path, value in kept.items():
-            full = os.path.join(self.root, path)
-            try:
-                if value is None:
-                    if os.path.lexists(full) and not os.path.isdir(full):
-                        os.remove(full)
-                    continue
-                os.makedirs(os.path.dirname(full) or self.root, exist_ok=True)
-                with open(full, "wb") as handle:
-                    handle.write(value[0])
-                os.chmod(full, value[1])
-            except OSError:
-                pass
-
     def plain_text(self, path: str) -> bool:
         # text diffs only for UTF-8 content without carriage returns, before and after
         versions = []
@@ -888,28 +833,6 @@ A partial but working deliverable is far better than an unfinished one. As soon 
 (the reproduction passes and the relevant existing tests pass), call finish: speed matters."""
 
 
-SECOND_LOOK = """You are an expert engineer giving a second, independent look at a task inside a container. A colleague
-has worked on the task statement below in %(root)s and believes the deliverable is finished. Treat that as a claim
-to test, not as a fact. You have a shell and file tools.
-
-What is kept: when you finish, the regular files inside %(root)s are kept as they are then (content and executable
-bit), and nothing else is. There is no internet and no package index; use what the container already has.
-
-Your job:
-1. Read the statement closely. List every deliverable and requirement: paths, names, formats, values, interfaces,
-   commands, constraints, and anything the statement says must not change.
-2. Look at what is there now and run the deliverable yourself, from a clean start, exactly as the statement says
-   it will be used.
-3. Probe beyond the example data in the container wherever the statement allows other inputs: other sizes, seeds,
-   edge cases, the exact output format. Look for values, sizes or answers that were built in from the examples.
-4. Change something only when a command you ran shows a defect. Keep everything that works; never remove a
-   deliverable without putting a working one in its place. Re-run your checks after any fix.
-5. Do scratch work in %(scratch)s, not in %(root)s. Remove stray files from %(root)s that are not deliverables,
-   then call finish with what you checked and what you changed.
-
-Be efficient: batch independent tool calls and keep command output short. Time left and budget are shown to you."""
-
-
 class Agent:
     def __init__(self, statement: str, root: str) -> None:
         self.statement = statement
@@ -922,7 +845,6 @@ class Agent:
         self.finish_asks = 0
         self.reviewed = False
         self.pushed = False
-        self.second_look = False
         self.money_wrapped = 0
         self.scratch = outside_scratch(root)
         self.summary = ""
@@ -1050,10 +972,6 @@ class Agent:
                         + ("\nPaths outside %s are not kept; make sure every deliverable you can place lives under %s."
                            % (self.root, self.root) if outside else "")
                         + "\nCreate them if they are deliverables (or confirm they are only inputs), then call finish again.")
-        if self.second_look:
-            self.finished = True
-            say("[FINISH] second look: %s" % summary[:300])
-            return "finished"
         window = max(1.0, self.budget.deadline - self.budget.started)
         if (not self.pushed and GIVING_UP.search(summary) and self.budget.left() > window * 0.3
                 and self.budget.money_left() > 0.03):
@@ -1146,43 +1064,6 @@ class Agent:
              + ("\n\nThis is a short run: act quickly, make the deliverable early, then refine." if self.budget.short() else "")},
         ]
         self.loop(messages)
-        if (self.finished and not self.budget.short() and self.budget.left() > SECOND_LOOK_MIN_SEC
-                and self.budget.money_left() >= SECOND_LOOK_MIN_MONEY and not self.model.guarded):
-            self.look_again()
-
-    def look_again(self) -> None:
-        # a fresh pair of eyes: new conversation, no memory of how the result was reached
-        changed = self.workspace.changed_paths()
-        if not changed:
-            return
-        kept = self.workspace.checkpoint(changed)
-        if kept is None:
-            return
-        self.second_look = True
-        self.finished = False
-        self.wrapped = 1
-        self.model.effort = REVIEW_EFFORT
-        # a different model checks the result, with room to finish its check before any step-down
-        self.model.driver = SECOND_LOOK_MODEL
-        self.model.guard_share = SECOND_LOOK_GUARD_SHARE
-        self.model.relief = 0
-        self.model.prompt_cost = 0.0
-        shown = self.deliverable_view(changed)
-        say("[RUN] second look by %s with %.0fs and $%.3f left"
-            % (self.model.driver, self.budget.left(), self.budget.money_left()))
-        messages = [
-            {"role": "system", "content": SECOND_LOOK % {"root": self.root, "scratch": self.scratch}},
-            {"role": "user", "content": "TASK STATEMENT\n\n" + self.statement
-             + "\n\nFILES CHANGED FROM THE START STATE\n" + shown
-             + "\n\nYOUR COLLEAGUE'S NOTE (unverified)\n" + clip(self.summary, 2000)
-             + "\n\n" + self.status_line()},
-        ]
-        self.loop(messages)
-        if not self.finished:
-            # the second look did not complete, so keep the result as it stood before it began
-            say("[RUN] second look did not finish; restoring the earlier result")
-            self.workspace.rollback(kept)
-        self.finished = True
 
     def loop(self, messages: list) -> None:
         for turn in range(1, TURN_CEILING + 1):
@@ -1229,10 +1110,6 @@ class Agent:
                 continue
             except OutOfRoom as stop:
                 say("[LOOP] %s" % stop)
-                return
-            if self.second_look and self.model.guarded:
-                # the cheap model must not re-judge the driver's result: end the second look before acting
-                say("[LOOP] budget step-down during the second look; ending it")
                 return
             calls = [c for c in (reply.get("tool_calls") or []) if isinstance(c, dict)]
             entry = {"role": "assistant", "content": reply.get("content") or ""}
