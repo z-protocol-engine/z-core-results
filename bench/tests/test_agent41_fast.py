@@ -170,3 +170,16 @@ def test_hook_notes():
 def test_example_flags_ignore_environment_errors():
     row = ["f = autowrap(e)", "error", "CodeWrapError", "setup.py build_ext failed"]
     assert A.example_flags([row], [row]) == []
+
+
+def test_repair_notes():
+    wrap = ("diff --git a/m.py b/m.py\n--- a/m.py\n+++ b/m.py\n@@ -1,2 +1,2 @@\n"
+            "-    return [cf * c for cf in f]\n+    return strip([cf * c for cf in f])\n")
+    assert "wrapped in strip" in A.repair_notes(wrap)[0]
+    coerce = ("diff --git a/m.py b/m.py\n--- a/m.py\n+++ b/m.py\n@@ -1,1 +1,3 @@\n"
+              "-    return B(x)\n+    data = [[m[i, j] if getattr(m[i, j], 'is_Matrix', False)\n"
+              "+             else Z(i, j) for j in r] for i in r]\n+    return B(data)\n")
+    assert "replaced depending on their type" in A.repair_notes(coerce)[0]
+    plain = ("diff --git a/m.py b/m.py\n--- a/m.py\n+++ b/m.py\n@@ -1,1 +1,1 @@\n"
+             "-    return x + 1\n+    return x + 2\n")
+    assert A.repair_notes(plain) == []

@@ -871,6 +871,7 @@ class Agent:
         self.traced = False
         self.hooked = False
         self.examined = False
+        self.repaired = False
         self.money_wrapped = 0
         self.scratch = outside_scratch(root)
         self.summary = ""
@@ -1015,6 +1016,20 @@ class Agent:
                 "statement's inputs and on variants with more arguments or variables; if the inherited public method "
                 "blocks a case the statement needs, override the public method itself. Then call finish again.")
 
+    def repair_gate(self, patch: str) -> str:
+        notes = repair_notes(patch)
+        if not notes:
+            return ""
+        say("[REPAIR-GATE] change repairs a value after it was produced")
+        return ("Not finished yet: your change repairs a wrong value after it was produced instead of fixing where "
+                "it is produced:\n" + "\n".join("  " + n for n in notes[:4]) + "\nFind the producer: run the smallest "
+                "expression that creates the wrong value (the operation inside the code you repaired, on the same "
+                "inputs), and compare it with an equivalent path that gives the right value (an operator versus the "
+                "function it stands for, a value test versus a structural test, one constructor versus another). "
+                "Fix the producer if it is wrong, and drop the repair if it is no longer needed; hidden tests usually "
+                "check the producer directly. Keep the repair only if you show the producer is right by design, and "
+                "say why when you call finish again.")
+
     def example_gate(self, patch: str) -> str:
         lines = issue_examples(self.statement)
         if not lines or self.budget.left() < 240:
@@ -1080,7 +1095,8 @@ class Agent:
         if changed and self.budget.left() > 120 and self.budget.money_left() > 0.02:
             patch = None
             for flag, gate in (("swept", self.sweep_gate), ("traced", self.trace_gate),
-                               ("hooked", self.hook_gate), ("examined", self.example_gate)):
+                               ("hooked", self.hook_gate), ("repaired", self.repair_gate),
+                               ("examined", self.example_gate)):
                 if getattr(self, flag):
                     continue
                 setattr(self, flag, True)
@@ -1688,6 +1704,35 @@ def hook_notes(patch: str) -> list:
             if hooks and name not in added.get(path, ()):
                 notes.append("%s: public %s() removed, %s() added" % (path, name, hooks[0]))
     return notes
+
+
+def repair_notes(patch: str) -> list:
+    """Changes that repair a value after it was produced instead of fixing its producer (no model call)."""
+    removed, blocks, notes, last = [], [], [], None
+    for path, kind, text, no in patch_lines(patch):
+        if kind == "-":
+            removed.append((path, text.strip()))
+        elif kind == "+":
+            if last and last[0] == path and last[1] == no - 1:
+                blocks[-1][1].append(text.strip())
+            else:
+                blocks.append((path, [text.strip()]))
+            last = (path, no)
+    old_returns = [(p, t[7:].strip()) for p, t in removed if t.startswith("return ")]
+    verbs = r"(strip|normali[sz]e|canonical\w*|clean\w*|coerce|convert\w*|sanitize)"
+    for path, lines in blocks:
+        for t in lines:
+            m = re.match(r"return (\w[\w.]*)\((.*)\)$", t)
+            if m and any(path == q and len(e) > 6 and e in m.group(2) for q, e in old_returns):
+                notes.append("%s: a result that used to be returned as is is now wrapped in %s(...)" % (path, m.group(1)))
+            m = re.match(r"(\w+) = (\w*%s\w*)\(\1\b" % verbs, t)
+            if m:
+                notes.append("%s: %s is re-normalised with %s() after it was computed" % (path, m.group(1), m.group(2)))
+        joined = " ".join(lines)
+        if " else " in joined and re.search(r"\bif (getattr\(\s*\w+\[[^\]]+\]|isinstance\(\s*\w+\[[^\]]+\]|"
+                                            r"\w+\[[^\]]+\]\.is_\w+)", joined):
+            notes.append("%s: entries of a computed result are replaced depending on their type" % path)
+    return list(dict.fromkeys(notes))
 
 
 def valid_arguments(arguments) -> str:
