@@ -100,3 +100,38 @@ def test_sweep_quiet_on_plain_fix(tmp_path):
     _repo(tmp_path, {"m.py": "def f(x):\n    return x + 1\n", "tests/test_m.py": "def f():\n    pass\n"})
     (tmp_path / "m.py").write_text("def f(x):\n    return x + 2\n")
     assert A.sibling_notes(str(tmp_path), _diff(tmp_path)) == []
+
+
+def test_stage3_keeps_relative_indent():
+    text = "    if a:\n        x = 1\n        y = 2\n    z = 3\n"
+    out, _ = tr(text, "  x = 1\n  y = 2\nz = 3", "  x = 1\nw = 9\nz = 3")
+    assert out == "    if a:\n        x = 1\n    w = 9\n    z = 3\n"
+
+
+def test_stage2_no_extra_blank_line():
+    out, _ = tr("a  \nb\nc\n", "a\nb", "a\nB\n")
+    assert out == "a\nB\nc\n"
+
+
+def test_crlf_new_text_with_crlf():
+    out, _ = tr("a\r\nb\r\n", "a\n", "A\r\n")
+    assert out == "A\r\nb\r\n"
+
+
+def test_sweep_ignores_class_the_change_added(tmp_path):
+    _repo(tmp_path, {"m.py": "import re\nR = re.compile(r'[0-9]+')\n"})
+    (tmp_path / "m.py").write_text("import re\nR = re.compile(r'[0-9_]+')\n")
+    assert A.sibling_notes(str(tmp_path), _diff(tmp_path)) == []
+
+
+def test_sweep_owner_must_contain_line(tmp_path):
+    src = "def helper():\n    pass\n\nclass A:\n    x = 1\n\ndef helper2():\n    pass\n\nclass B:\n    def helper(self):\n        pass\n"
+    _repo(tmp_path, {"m.py": src})
+    (tmp_path / "m.py").write_text(src.replace("x = 1", "x = 2"))
+    assert A.sibling_notes(str(tmp_path), _diff(tmp_path)) == []
+
+
+def test_valid_arguments_lenient():
+    assert A.valid_arguments('{"content": "a\tb"}') == '{"content": "a\tb"}'
+    assert A.valid_arguments({"a": 1}) == '{"a": 1}'
+    assert A.valid_arguments('{"summary": "half') == "{}"

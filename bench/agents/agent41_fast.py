@@ -23,7 +23,7 @@ REQUEST_SEED = 29
 # provider route proven in our agent.py; dropped for the rest of the run after a few failures
 PROVIDER_ROUTES = {"openai/gpt-6-luna": {"only": ["azure/eu"], "allow_fallbacks": False}}
 PROVIDER_FALLBACK_AFTER = 3
-CALL_TIMEOUT_SEC = 900.0
+CALL_TIMEOUT_SEC = 480.0
 REVIEW_EFFORT = "high"
 FALLBACK_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_WALL_SEC = 900.0
@@ -345,7 +345,8 @@ class Model:
                            self.budget.left(), choices[0].get("finish_reason"), usage.get("prompt_tokens"),
                            details.get("cached_tokens"), usage.get("completion_tokens")))
                     self.answered = True
-                    self.route_failures = 0
+                    if self.route_failures < PROVIDER_FALLBACK_AFTER:
+                        self.route_failures = 0
                     message["_finish"] = choices[0].get("finish_reason") or ""
                     message["_model"] = model
                     self.relief = RELIEF_CALLS if message["_finish"] == "length" else max(0, self.relief - 1)
@@ -676,6 +677,7 @@ class Shell:
         self.budget = budget
         self.jobs: dict = {}
         self.count = 0
+        self.groups: list = []  # process groups of finished commands: children left with & live until close
 
     def run(self, command: str, timeout: float) -> str:
         room = self.budget.left() - 15
@@ -691,6 +693,7 @@ class Shell:
             try:
                 process.wait(timeout=limit)
                 note = "\n[exit code %d]" % process.returncode
+                self.groups.append(process.pid)
             except subprocess.TimeoutExpired:
                 try:
                     os.killpg(os.getpgid(process.pid), signal.SIGKILL)
@@ -729,6 +732,11 @@ class Shell:
         return clip(text, OUTPUT_CAP) + "\n[%s: %s]" % (name, state)
 
     def close(self) -> None:
+        for group in self.groups:
+            try:
+                os.killpg(group, signal.SIGKILL)
+            except Exception:
+                pass
         for process, path, _ in self.jobs.values():
             if process.poll() is None:
                 try:
@@ -867,7 +875,7 @@ class Agent:
         self.wrapped = 0
         self.views = []
 
-    def resolve(self, path: str) -> str:
+    def resolve(self, path) -> str:
         path = os.path.expanduser(str(path or ""))
         return path if os.path.isabs(path) else os.path.join(self.root, path)
 
@@ -976,9 +984,10 @@ class Agent:
         missing = []
         for path in sorted(set(re.findall(r"(?<![\w.:/~-])(/[A-Za-z0-9_.\-/]+\.[A-Za-z0-9]{1,8})\b", self.statement))):
             # URLs (https://host/x.y), system paths and paths quoted from tracebacks of this repo are not deliverables
-            if path.startswith(("//", "/dev/", "/proc/", "/usr/", "/bin/", "/etc/", "/lib", "/opt/", "/home/")):
+            if path.startswith(("/dev/", "/proc/", "/usr/", "/bin/", "/etc/", "/lib/", "/lib64/", "/Users/")):
                 continue
-            if os.path.exists(os.path.join(self.root, path.lstrip("/"))):
+            parts = path.strip("/").split("/")
+            if any(os.path.exists(os.path.join(self.root, *parts[k:])) for k in range(len(parts)) if parts[k:]):
                 continue
             if not os.path.exists(path):
                 missing.append(path)
@@ -1012,8 +1021,10 @@ class Agent:
                 say("[SWEEP] %d sibling(s) shown before finish" % len(notes))
                 return ("Not finished yet: these places share the pattern you changed but were left as they were:\n"
                         + "\n".join("  " + n for n in notes)
-                        + "\nFor each, decide whether the same fix applies (hidden tests often check the siblings) "
-                        "and change it if so, or leave it if it truly differs. Then call finish again.")
+                        + "\nHidden tests usually check the same behaviour on these siblings. Apply the same change to "
+                        "each one, unless a command you run shows that the generalized form breaks something (try it: "
+                        "make the change, run the report's example and the existing tests). A belief that a sibling "
+                        "is 'deliberate' is not enough. Then call finish again.")
         window = max(1.0, self.budget.deadline - self.budget.started)
         if (not self.pushed and GIVING_UP.search(summary) and self.budget.left() > window * 0.3
                 and self.budget.money_left() > 0.03):
@@ -1162,8 +1173,8 @@ class Agent:
                 entry["tool_calls"] = [{"id": c.get("id") or "call_%d_%d" % (turn, i), "type": "function",
                                         "function": {"name": (c.get("function") or {}).get("name", ""),
                                                      "arguments": valid_arguments((c.get("function") or {}).get("arguments"))},
-                                        "_cut": valid_arguments((c.get("function") or {}).get("arguments"))
-                                        != ((c.get("function") or {}).get("arguments") or "{}")}
+                                        "_cut": valid_arguments((c.get("function") or {}).get("arguments")) == "{}"
+                                        and ((c.get("function") or {}).get("arguments") or "{}").strip() not in ("{}", "")}
                                        for i, c in enumerate(calls)]
             messages.append(entry)
             if not calls:
@@ -1176,13 +1187,15 @@ class Agent:
             for call in entry["tool_calls"]:
                 name = call["function"]["name"]
                 if call.pop("_cut", False):
-                    result = ("error: the arguments of this %s call were cut off (invalid JSON), so nothing was run. "
-                              "Send it again, shorter." % name)
+                    result = (("error: the arguments of this %s call were cut off at the length limit, so nothing "
+                               "was run. Send it again, shorter." if reply.get("_finish") == "length" else
+                               "error: the arguments of this %s call are not valid JSON, so nothing was run. "
+                               "Send it again with valid JSON arguments.") % name)
                     say("[TOOL] %s arguments cut off -> not run" % name)
                     messages.append({"role": "tool", "tool_call_id": call["id"], "content": result})
                     continue
                 try:
-                    args = json.loads(call["function"]["arguments"] or "{}")
+                    args = json.loads(call["function"]["arguments"] or "{}", strict=False)
                     if not isinstance(args, dict):
                         raise ValueError("arguments must be an object")
                     result = self.tool(name, args)
@@ -1220,23 +1233,28 @@ def outside_scratch(root: str) -> str:
 SYNTAX_TOOLS = {
     ".js": ["node", "--check"], ".mjs": ["node", "--check"], ".cjs": ["node", "--check"],
     ".sh": ["bash", "-n"], ".bash": ["bash", "-n"],
-    ".rb": ["ruby", "-c"], ".php": ["php", "-l"], ".pl": ["perl", "-c"],
+    ".rb": ["ruby", "-c"], ".php": ["php", "-l"],
     ".lua": ["luac", "-p"], ".go": ["gofmt", "-e"],
 }
 
 
-def reindent(lines: list, indent: str) -> list:
-    # shift a block so its first non-blank line starts at indent, keeping relative indentation
+def reindent(lines: list, indent: str, old_indent: "str | None" = None, levels: "dict | None" = None) -> list:
+    # map each indentation level of old_text to the file's level for the same line; other levels are moved by
+    # the first line's offset, so relative indentation is kept
     first = next((l for l in lines if l.strip()), "")
-    base = first[:len(first) - len(first.lstrip())]
+    base = old_indent if old_indent is not None else first[:len(first) - len(first.lstrip())]
+    shift = len(indent) - len(base)
+    levels = levels or {}
     out = []
     for line in lines:
         if not line.strip():
             out.append("")
-        elif line.startswith(base):
-            out.append(indent + line[len(base):])
-        else:
-            out.append(indent + line.lstrip())
+            continue
+        own = len(line) - len(line.lstrip())
+        if "\t" in line[:own]:
+            out.append(line)
+            continue
+        out.append(" " * max(0, levels.get(own, own + shift)) + line.lstrip())
     return out
 
 
@@ -1249,6 +1267,8 @@ def tolerant_replace(text: str, old: str, new: str):
         return None, "old_text is empty"
     crlf = "\r\n" in text and text.count("\r\n") == text.count("\n") and "\r\n" not in old
     work = text.replace("\r\n", "\n") if crlf else text
+    if crlf:
+        new = new.replace("\r\n", "\n")
     back = (lambda t: t.replace("\n", "\r\n")) if crlf else (lambda t: t)
     hits = work.count(old)
     if hits == 1:
@@ -1265,7 +1285,7 @@ def tolerant_replace(text: str, old: str, new: str):
     if old_lines and old_lines[-1] == "":
         old_lines = old_lines[:-1]
     new_lines = new.split("\n")
-    if new_lines and new_lines[-1] == "" and old.endswith("\n"):
+    if new_lines and new_lines[-1] == "":
         new_lines = new_lines[:-1]
     n = len(old_lines)
     # stage 2: trailing whitespace ignored
@@ -1292,7 +1312,13 @@ def tolerant_replace(text: str, old: str, new: str):
         if len(matches) == 1:
             i, j = matches[0]
             indent = lines[i][:len(lines[i]) - len(lines[i].lstrip())]
-            lines[i:j] = reindent(new_lines, indent)
+            first_old = next(l for l in old_lines if l.strip())
+            olds = [l for l in old_lines if l.strip()]
+            fils = [l for l in lines[i:j] if l.strip()]
+            levels = {}
+            for o, f in zip(olds, fils):
+                levels.setdefault(len(o) - len(o.lstrip()), len(f) - len(f.lstrip()))
+            lines[i:j] = reindent(new_lines, indent, first_old[:len(first_old) - len(first_old.lstrip())], levels)
             return back("\n".join(lines)), " (matched ignoring indentation at line %d; new_text re-indented)" % (i + 1)
         if len(matches) > 1:
             return None, "old_text matches %d places when indentation is ignored; add surrounding lines" % len(matches)
@@ -1363,7 +1389,8 @@ def sibling_notes(root: str, patch: str, limit: int = 8) -> list:
             for d_no, d_indent, name in defs:
                 if d_no > no:
                     break
-                if d_no == no or d_indent < indent:
+                if d_no == no or (d_indent < indent and all(
+                        not t.strip() or len(t) - len(t.lstrip()) > d_indent for t in lines[d_no:no - 1])):
                     owner = (d_no, d_indent, name)
             if owner:
                 edited.add(owner)
@@ -1390,15 +1417,17 @@ def sibling_notes(root: str, patch: str, limit: int = 8) -> list:
             for no in sorted(changed):
                 if 0 < no <= len(lines):
                     for cls in ascii_class.findall(lines[no - 1]):
-                        if cls not in replaced:
+                        if cls not in replaced and not (cls in added_classes and cls not in removed_classes):
                             notes.append("%s:%d  %s   (you replaced %s here but %s is unchanged)"
                                          % (path, no, lines[no - 1].strip()[:120], "/".join(sorted(replaced)), cls))
     return list(dict.fromkeys(notes))[:limit]
 
 def valid_arguments(arguments) -> str:
     # arguments cut off mid-JSON would be replayed every turn and can make the provider refuse the whole request
+    if isinstance(arguments, dict):
+        return json.dumps(arguments)
     try:
-        json.loads(arguments or "{}")
+        json.loads(arguments or "{}", strict=False)
         return arguments or "{}"
     except (TypeError, ValueError):
         return "{}"
