@@ -95,3 +95,27 @@ Détails par tâche : `results/*.jsonl`. Reproduire : `python3 run_bench.py --va
   - 17318 et 18698 : résolus.
 
 Pour reproduire : `python3 bridge/run_bridge_task.py <tâche> <port> [agent41|agent41_fast]`, un sous-agent qui pilote `bridge/bridge_cli.py`, puis `python3 bridge/summary.py`.
+
+## A/B complet : 40 runs, 27 paires (même pilote Claude Haiku, à l'aveugle, 0 appel OpenRouter)
+
+| Jeu | agent41 d'origine | agent41_fast |
+|---|---|---|
+| 13 tâches mises de côté (jamais regardées) | 11/13, 248 tours, 5433 s | 11/13, 151 tours, 2250 s |
+| 7 tâches de l'A/B, passage 1 | 4/7, 95 tours, 1414 s | 5/7, 70 tours, 1317 s |
+| 7 tâches de l'A/B, passage 2 | 5/7, 90 tours, 2167 s | 4/7, 63 tours, 1638 s |
+| **Total (27 paires)** | **20/27, 433 tours, 9014 s** | **20/27, 284 tours, 5205 s** |
+
+**Conclusions**
+- **Taux de résolution identique : 20/27 pour chaque agent.** Le +1 du premier A/B relevait du bruit : 19495 et 23950 changent d'issue d'un passage à l'autre, dans les deux sens.
+- **Efficacité :** −34 % de tours. Le temps baisse de −42 %, mais une seule tâche pèse lourd : sur 19040, l'original a pris 51 tours et 3058 s, contre 15 tours et 222 s pour la version rapide. Sans 19040, le temps baisse d'environ −13 %.
+- **Pourquoi l'original est plus lent :**
+  - Il refuse le `finish` à tort, à cause d'URL ou de chemins de traceback pris pour des livrables manquants. C'est arrivé sur 8 runs observés (17139, 17630, 20438, 23824, 24443, 19040 et d'autres).
+  - Il impose une revue forcée et un second regard.
+  - Sur 19040, il est resté bloqué jusqu'à ce que le pilote justifie les URL dans son résumé.
+- **Incidents de protocole :**
+  - Plusieurs pilotes ont fait des appels d'outils parasites, tous refusés sans effet : `interrupt_session`, `create_session`, `archive_session`, Claude Docs.
+  - Le pilote de 21612 (fast) a listé `bench/bridge` et téléchargé antlr4 dans `/tmp/x`. Le run 21612 de l'original l'a ensuite réutilisé, car `/tmp` est partagé.
+  - Aucun de ces incidents n'a touché un correctif noté.
+- **Limites :**
+  - Le pilote est Haiku, pas luna : ce banc mesure ce que la structure de l'agent apporte, pas le score que donnerait luna.
+  - n=27.
