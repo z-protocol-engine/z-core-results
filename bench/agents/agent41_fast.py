@@ -1022,13 +1022,19 @@ class Agent:
             return ""
         say("[REPAIR-GATE] change repairs a value after it was produced")
         return ("Not finished yet: your change repairs a wrong value after it was produced instead of fixing where "
-                "it is produced:\n" + "\n".join("  " + n for n in notes[:4]) + "\nFind the producer: run the smallest "
-                "expression that creates the wrong value (the operation inside the code you repaired, on the same "
-                "inputs), and compare it with an equivalent path that gives the right value (an operator versus the "
-                "function it stands for, a value test versus a structural test, one constructor versus another). "
-                "Fix the producer if it is wrong, and drop the repair if it is no longer needed; hidden tests usually "
-                "check the producer directly. Keep the repair only if you show the producer is right by design, and "
-                "say why when you call finish again.")
+                "it is produced:\n" + "\n".join("  " + n for n in notes[:4]) + "\nDo this before finishing:\n"
+                "1. Find the first call that produces the wrong value: run the operation inside the code you "
+                "repaired on the same inputs, then the operations it calls, until one returns the wrong kind or "
+                "value of object from right inputs.\n"
+                "2. Fix that call itself, even if it lives in a shared or core module. Routing around it (using "
+                "another operator, converting or re-normalising its result) leaves it broken, and hidden tests call "
+                "it directly.\n"
+                "3. If your repair removes a value that a test failed to recognise (a zero, empty, equality or type "
+                "test such as truthiness), call that test directly on the value. If the value really is zero, empty "
+                "or equal but the test says otherwise, the test is the producer: fix the test.\n"
+                "Then remove the repair if it is no longer needed, re-run the report's example and the existing "
+                "tests of the module you changed, and call finish again. Keep the repair only if you show the "
+                "producer is right by design.")
 
     def example_gate(self, patch: str) -> str:
         lines = issue_examples(self.statement)
