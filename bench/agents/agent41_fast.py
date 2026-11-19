@@ -1744,6 +1744,8 @@ def repair_notes(patch: str) -> list:
                        r"\w*(?:Zero|Empty|Null|Identity)\w*\(", joined):
             # a degenerate result (zero, empty) rebuilt as another object: typical downstream patch
             notes.append("%s: a computed value is replaced by a new zero/empty object depending on its type" % path)
+        if re.search(r"\bwhile (\w+) and .*(?:not \1\[0\]|is_zero|==\s*0)[^:]*:\s*\1 = \1\[1:\]", joined):
+            notes.append("%s: leading zero entries of a computed result are trimmed by hand" % path)
     return list(dict.fromkeys(notes))
 
 
