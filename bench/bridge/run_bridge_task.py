@@ -1,6 +1,6 @@
 """Run agent41_fast on one bench task with a Claude sub-agent as its model (through the bridge), then grade it.
 
-usage: python run_bridge_task.py INSTANCE PORT   -> /home/user/bench_work/bridge/<INSTANCE>/result.json
+usage: python run_bridge_task.py INSTANCE PORT [AGENT]   (AGENT = agents/<AGENT>.py, default agent41_fast)
 """
 import json
 import os
@@ -14,8 +14,9 @@ sys.path.insert(0, BENCH)
 import run_bench  # noqa: E402
 
 iid = sys.argv[1] if "__" in sys.argv[1] else "sympy__sympy-" + sys.argv[1]
+agent_name = sys.argv[3] if len(sys.argv) > 3 else "agent41_fast"
 port = int(sys.argv[2])
-out = "/home/user/bench_work/bridge/" + iid
+out = "/home/user/bench_work/bridge/%s__%s" % (agent_name, iid) if agent_name != "agent41_fast" else "/home/user/bench_work/bridge/" + iid
 subprocess.run(["rm", "-rf", out])
 os.makedirs(out + "/ipc")
 server = subprocess.Popen([sys.executable, os.path.join(HERE, "bridge_model.py"), str(port), out + "/ipc"])
@@ -32,7 +33,7 @@ for key in ("SANDBOX_PROXY_URL", "VIRTUAL_ENV", "HTTPS_PROXY", "https_proxy", "H
 began = time.time()
 try:
     with open(out + "/agent.log", "w") as handle:
-        subprocess.run([sys.executable, os.path.join(BENCH, "load_agent.py"), os.path.join(BENCH, "agents", "agent41_fast.py"),
+        subprocess.run([sys.executable, os.path.join(BENCH, "load_agent.py"), os.path.join(BENCH, "agents", agent_name + ".py"),
                         out + "/statement.txt", out + "/agent.patch"], cwd=repo, env=env, stdout=handle,
                        stderr=subprocess.STDOUT, timeout=6000)
 finally:

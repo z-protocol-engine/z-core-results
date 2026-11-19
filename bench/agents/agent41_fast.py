@@ -34,7 +34,7 @@ GUARD_SHARE = 0.7
 HANDIN_RESERVE_SEC = 40.0
 CALL_MARGIN_SEC = 8.0
 SHORT_WINDOW_SEC = 420.0
-REVIEW_MIN_SEC = 1e9  # forced review round off (a41_norev: same solve rate, faster)
+REVIEW_MIN_SEC = 1e9  # forced review round off (a41_norev: same solve rate, faster); kept for AGENT_OVERRIDES
 REPLY_TOKENS = 32000
 REPLY_TOKENS_SHORT = 32000
 THINK_TOKENS_MAX = 8000
@@ -828,15 +828,14 @@ behaviour the maintainers would expect, on more cases than the report shows:
   it crashes: if a helper fails on input its contract excludes, make the caller stop producing that input.
 - Prefer removing or correcting the faulty logic over adding special-case branches around it. Keep the change small
   and in the code's own style; do not rename or restructure public methods the report did not ask about.
-- Before finishing, sweep for siblings: every other definition, method, format string, regex class, operand order
-  or related property that shares the pattern you changed (for example, letters and digits; all printers of one
-  object; a == b and b == a). Fix each one the same way, or know why it differs.
+- Before finishing, sweep for siblings: every other definition, method, format string, pattern or related
+  property that shares the pattern you changed. Fix each one the same way, or know why it differs.
 - Existing tests that assert the old, reported behaviour are outdated: update them to the corrected behaviour.
   Never narrow a principled fix with "except when ..." just to keep an outdated assertion passing.
 - When the report hedges about the expected result ("I assume", "should it be ...?", "not sure"), decide it from
   consistency with analogous cases in the report and the codebase's existing conventions, not from the guess.
 - Look at how similar cases are already handled in the code (and in git log -p for the touched function) before
-  inventing a new mechanism. Test variants beyond the example: other members of the family, both orders, edge
+  inventing a new mechanism. Test variants beyond the example: other members of the family, edge
   values, multi-variable or composite inputs.
 
 Way of working:
@@ -966,9 +965,13 @@ class Agent:
 
     def syntax_note(self, path: str) -> str:
         if path.endswith(".py"):
-            done = subprocess.run([sys.executable, "-m", "py_compile", path], capture_output=True)
-            if done.returncode != 0:
-                return "\nWARNING: the file does not compile:\n" + clip(done.stderr.decode("utf-8", "replace"), 1500)
+            try:
+                with open(path, "rb") as handle:
+                    compile(handle.read(), path, "exec", dont_inherit=True)
+            except (SyntaxError, ValueError) as error:
+                return "\nWARNING: the file does not compile:\n" + clip("%s: %s" % (type(error).__name__, error), 1500)
+            except OSError:
+                pass
             return ""
         tool = SYNTAX_TOOLS.get(os.path.splitext(path)[1].lower())
         if tool and shutil.which(tool[0]):
@@ -980,6 +983,25 @@ class Agent:
                 text = (done.stderr or done.stdout).decode("utf-8", "replace")
                 return "\nWARNING: %s reports a syntax error:\n%s" % (tool[0], clip(text, 1500))
         return ""
+
+    def sweep_gate(self, patch: str) -> str:
+        notes = sibling_notes(self.root, patch)
+        if not notes:
+            return ""
+        say("[SWEEP] %d sibling(s) shown before finish" % len(notes))
+        return ("Not finished yet: these places share the pattern you changed but were left as they were:\n"
+                + "\n".join("  " + n for n in notes)
+                + "\nHidden tests usually check the same behaviour on these siblings. Apply the same change to "
+                "each one, unless a command you run shows that the generalized form breaks something (try it: "
+                "make the change, run the report's example and the existing tests). A belief that a sibling "
+                "is 'deliberate' is not enough, and an existing test that asserts a sibling's old output is outdated "
+                "by your fix: update that test rather than reverting the sibling. Then call finish again.")
+
+    def trace_gate(self, patch: str) -> str:
+        note = traceback_note(self.statement, self.root, patch)
+        if note:
+            say("[TRACE-GATE] change only in the innermost traceback frame; callers shown")
+        return note
 
     def finish_check(self, summary: str) -> str:
         missing = []
@@ -1011,32 +1033,20 @@ class Agent:
                         + ("\nPaths outside %s are not kept; make sure every deliverable you can place lives under %s."
                            % (self.root, self.root) if outside else "")
                         + "\nCreate them if they are deliverables (or confirm they are only inputs), then call finish again.")
-        if not self.swept and changed and self.budget.left() > 120 and self.budget.money_left() > 0.02:
-            self.swept = True
-            try:
-                notes = sibling_notes(self.root, self.workspace.patch())
-            except Exception as error:
-                say("[SWEEP] skipped: %s" % error)
-                notes = []
-            if notes:
-                say("[SWEEP] %d sibling(s) shown before finish" % len(notes))
-                return ("Not finished yet: these places share the pattern you changed but were left as they were:\n"
-                        + "\n".join("  " + n for n in notes)
-                        + "\nHidden tests usually check the same behaviour on these siblings. Apply the same change to "
-                        "each one, unless a command you run shows that the generalized form breaks something (try it: "
-                        "make the change, run the report's example and the existing tests). A belief that a sibling "
-                        "is 'deliberate' is not enough, and an existing test that asserts a sibling's old output is outdated by "
-                        "your fix: update that test rather than reverting the sibling. Then call finish again.")
-        if not self.traced and changed and self.budget.left() > 120 and self.budget.money_left() > 0.02:
-            self.traced = True
-            try:
-                note = traceback_note(self.statement, self.root, self.workspace.patch())
-            except Exception as error:
-                say("[TRACE-GATE] skipped: %s" % error)
-                note = ""
-            if note:
-                say("[TRACE-GATE] change only in the innermost traceback frame; callers shown")
-                return note
+        if changed and self.budget.left() > 120 and self.budget.money_left() > 0.02:
+            patch = None
+            for flag, gate in (("swept", self.sweep_gate), ("traced", self.trace_gate)):
+                if getattr(self, flag):
+                    continue
+                setattr(self, flag, True)
+                try:
+                    patch = self.workspace.patch() if patch is None else patch
+                    note = gate(patch)
+                except Exception as error:
+                    say("[GATE] %s skipped: %s" % (flag, error))
+                    note = ""
+                if note:
+                    return note
         window = max(1.0, self.budget.deadline - self.budget.started)
         if (not self.pushed and GIVING_UP.search(summary) and self.budget.left() > window * 0.3
                 and self.budget.money_left() > 0.03):
@@ -1182,12 +1192,16 @@ class Agent:
                 entry["reasoning_details"] = reply["reasoning_details"]
                 entry["_model"] = reply.get("_model")
             if calls:
-                entry["tool_calls"] = [{"id": c.get("id") or "call_%d_%d" % (turn, i), "type": "function",
-                                        "function": {"name": (c.get("function") or {}).get("name", ""),
-                                                     "arguments": valid_arguments((c.get("function") or {}).get("arguments"))},
-                                        "_cut": valid_arguments((c.get("function") or {}).get("arguments")) == "{}"
-                                        and ((c.get("function") or {}).get("arguments") or "{}").strip() not in ("{}", "")}
-                                       for i, c in enumerate(calls)]
+                entry["tool_calls"] = []
+                for i, c in enumerate(calls):
+                    function = c.get("function") or {}
+                    raw = function.get("arguments")
+                    fixed = valid_arguments(raw)
+                    entry["tool_calls"].append({
+                        "id": c.get("id") or "call_%d_%d" % (turn, i), "type": "function",
+                        "function": {"name": function.get("name", ""), "arguments": fixed},
+                        # arguments that do not parse are reported, never run with empty arguments
+                        "_cut": fixed == "{}" and str(raw or "{}").strip() not in ("{}", "")})
             messages.append(entry)
             if not calls:
                 cut = (" Your last reply was cut off at the length limit: nothing in it was run or saved. Write at "
@@ -1250,25 +1264,19 @@ SYNTAX_TOOLS = {
 }
 
 
-def reindent(lines: list, indent: str, old_indent: "str | None" = None, levels: "dict | None" = None) -> list:
-    # map each indentation level of old_text to the file's level for the same line; other levels are moved by
-    # the first line's offset, so relative indentation is kept
-    first = next((l for l in lines if l.strip()), "")
-    base = old_indent if old_indent is not None else first[:len(first) - len(first.lstrip())]
-    shift = len(indent) - len(base)
-    levels = levels or {}
+def reindent(lines: list, levels: dict, shift: int) -> list:
+    # each indentation level of old_text goes to the file's level for the same line; other levels move by shift,
+    # so relative indentation is kept
     out = []
     for line in lines:
+        own = indent_of(line)
         if not line.strip():
             out.append("")
-            continue
-        own = len(line) - len(line.lstrip())
-        if "\t" in line[:own]:
+        elif "\t" in line[:own]:
             out.append(line)
-            continue
-        out.append(" " * max(0, levels.get(own, own + shift)) + line.lstrip())
+        else:
+            out.append(" " * max(0, levels.get(own, own + shift)) + line.lstrip())
     return out
-
 
 def tolerant_replace(text: str, old: str, new: str):
     """Replace old by new once. Returns (new_text, note) or (None, error).
@@ -1302,7 +1310,8 @@ def tolerant_replace(text: str, old: str, new: str):
     n = len(old_lines)
     # stage 2: trailing whitespace ignored
     want = [l.rstrip() for l in old_lines]
-    found = [i for i in range(len(lines) - n + 1) if [l.rstrip() for l in lines[i:i + n]] == want]
+    stripped = [l.rstrip() for l in lines]
+    found = [i for i in range(len(lines) - n + 1) if stripped[i] == want[0] and stripped[i:i + n] == want]
     if len(found) == 1:
         i = found[0]
         lines[i:i + n] = new_lines
@@ -1324,13 +1333,11 @@ def tolerant_replace(text: str, old: str, new: str):
         if len(matches) == 1:
             i, j = matches[0]
             indent = lines[i][:len(lines[i]) - len(lines[i].lstrip())]
-            first_old = next(l for l in old_lines if l.strip())
             olds = [l for l in old_lines if l.strip()]
-            fils = [l for l in lines[i:j] if l.strip()]
             levels = {}
-            for o, f in zip(olds, fils):
-                levels.setdefault(len(o) - len(o.lstrip()), len(f) - len(f.lstrip()))
-            lines[i:j] = reindent(new_lines, indent, first_old[:len(first_old) - len(first_old.lstrip())], levels)
+            for o, f in zip(olds, [l for l in lines[i:j] if l.strip()]):
+                levels.setdefault(indent_of(o), indent_of(f))
+            lines[i:j] = reindent(new_lines, levels, len(indent) - indent_of(olds[0]))
             return back("\n".join(lines)), " (matched ignoring indentation at line %d; new_text re-indented)" % (i + 1)
         if len(matches) > 1:
             return None, "old_text matches %d places when indentation is ignored; add surrounding lines" % len(matches)
@@ -1346,23 +1353,26 @@ def tolerant_replace(text: str, old: str, new: str):
     return None, "old_text not found (even ignoring whitespace); re-read the file before editing" + hint
 
 
-def sibling_notes(root: str, patch: str, limit: int = 8) -> list:
-    """Places in the touched files that share the pattern of the change but were left unchanged (no model call).
+TEST_PATH = re.compile(r"(^|/)(tests?|testing)(/|_)|_test\.py$")
+DEF_LINE = re.compile(r"\s*(?:async\s+)?def (\w+)\s*\(")
 
-    1. other definitions, in the same file, of a function or method the change edited (e.g. one _latex of three);
-    2. ASCII regex character classes ([0-9], [a-z]...) left next to a class the change replaced."""
-    test_path = re.compile(r"(^|/)(tests?|testing)(/|_)|_test\.py$")
-    files, removed_classes, added_classes, current, new_no = {}, set(), set(), None, 0
-    literal = re.compile(r'"((?:[^"\\\n]|\\.)*)"|\'((?:[^\'\\\n]|\\.)*)\'')
-    shapes = []  # punctuation sets of the string literals the change rewrote
-    char_class = re.compile(r"\[\^?[^\[\]\s]{1,24}\]")
+
+def indent_of(text: str) -> int:
+    return len(text) - len(text.lstrip())
+
+
+def patch_lines(patch: str):
+    """Yield (path, kind, text, new_line_no) for +/- lines of non-test Python files; kind is '+' or '-'.
+
+    For '-' lines new_line_no is the new-file line the removal sits after (0 at the top of a hunk)."""
+    current, new_no = None, 0
     for line in patch.splitlines():
         if line.startswith("+++ "):
             current = line[6:].strip() if line.startswith("+++ b/") else None
-            if current and (test_path.search(current) or not current.endswith(".py")):
+            if current and (TEST_PATH.search(current) or not current.endswith(".py")):
                 current = None
             if current:
-                files.setdefault(current, set())
+                yield current, "", "", 0
             continue
         if current is None:
             continue
@@ -1371,41 +1381,68 @@ def sibling_notes(root: str, patch: str, limit: int = 8) -> list:
             new_no = int(m.group(1)) - 1 if m else 0
         elif line.startswith("+"):
             new_no += 1
-            files[current].add(new_no)
-            added_classes.update(char_class.findall(line[1:]))
+            yield current, "+", line[1:], new_no
         elif line.startswith("-"):
-            removed_classes.update(char_class.findall(line[1:]))
-            for a, b in literal.findall(line[1:]):
+            yield current, "-", line[1:], new_no
+        elif line.startswith(" "):
+            new_no += 1
+
+
+def read_lines(root: str, path: str):
+    try:
+        with open(os.path.join(root, path), errors="replace") as handle:
+            return handle.read().splitlines()
+    except OSError:
+        return None
+
+
+def py_defs(lines: list) -> list:
+    return [(k + 1, indent_of(t), m.group(1)) for k, t in enumerate(lines) for m in [DEF_LINE.match(t)] if m]
+
+
+def def_owner(lines: list, defs: list, no: int):
+    """The (line, indent, name) of the def whose body holds line no, or None."""
+    indent = indent_of(lines[no - 1]) if lines[no - 1].strip() else 10 ** 6
+    owner = None
+    for d_no, d_indent, name in defs:
+        if d_no > no:
+            break
+        if d_no == no or (d_indent < indent and all(not t.strip() or indent_of(t) > d_indent
+                                                    for t in lines[d_no:no - 1])):
+            owner = (d_no, d_indent, name)
+    return owner
+
+
+def sibling_notes(root: str, patch: str, limit: int = 8) -> list:
+    """Places in the touched files that share the pattern of the change but were left unchanged (no model call).
+
+    1. other definitions, in the same file, of a function or method the change edited (e.g. one _latex of three);
+    2. ASCII regex character classes ([0-9], [a-z]...) left next to a class the change replaced."""
+    files, removed_classes, added_classes = {}, set(), set()
+    literal = re.compile(r'"((?:[^"\\\n]|\\.)*)"|\'((?:[^\'\\\n]|\\.)*)\'')
+    shapes = []  # punctuation sets of the string literals the change rewrote
+    char_class = re.compile(r"\[\^?[^\[\]\s]{1,24}\]")
+    for path, kind, text, no in patch_lines(patch):
+        changed = files.setdefault(path, set())
+        if kind == "+":
+            changed.add(no)
+            added_classes.update(char_class.findall(text))
+        elif kind == "-":
+            removed_classes.update(char_class.findall(text))
+            for a, b in literal.findall(text):
                 shape = set(re.sub(r"[\w\s]", "", a or b))
                 if len(shape) >= 3:
                     shapes.append(shape)
-        elif line.startswith(" "):
-            new_no += 1
     notes = []
     replaced = removed_classes - added_classes
     ascii_class = re.compile(r"\[(?:a-z|A-Z|0-9|a-zA-Z|A-Za-z|a-zA-Z0-9|A-Za-z0-9|0-9a-zA-Z|a-zA-Z0-9_|A-Za-z0-9_)[^\]]*\]")
     for path, changed in files.items():
-        try:
-            with open(os.path.join(root, path), errors="replace") as handle:
-                lines = handle.read().splitlines()
-        except OSError:
+        lines = read_lines(root, path)
+        if lines is None:
             continue
-        defs = [(k + 1, len(t) - len(t.lstrip()), m.group(1)) for k, t in enumerate(lines)
-                for m in [re.match(r"\s*(?:async\s+)?def (\w+)\s*\(", t)] if m]
-        edited = set()
-        for no in changed:
-            if not (0 < no <= len(lines)) or not lines[no - 1].strip():
-                continue
-            indent = len(lines[no - 1]) - len(lines[no - 1].lstrip())
-            owner = None
-            for d_no, d_indent, name in defs:
-                if d_no > no:
-                    break
-                if d_no == no or (d_indent < indent and all(
-                        not t.strip() or len(t) - len(t.lstrip()) > d_indent for t in lines[d_no:no - 1])):
-                    owner = (d_no, d_indent, name)
-            if owner:
-                edited.add(owner)
+        defs = py_defs(lines)
+        edited = {owner for no in changed if 0 < no <= len(lines) and lines[no - 1].strip()
+                  for owner in [def_owner(lines, defs, no)] if owner}
         for d_no, _indent, name in sorted(edited):
             if name.startswith("__") or name.startswith("test"):
                 continue
@@ -1436,46 +1473,18 @@ def sibling_notes(root: str, patch: str, limit: int = 8) -> list:
 
 def edited_functions(root: str, patch: str) -> set:
     """Names of the functions (outside tests) whose bodies the patch changes."""
-    test_path = re.compile(r"(^|/)(tests?|testing)(/|_)|_test\.py$")
-    names, current, new_no, changed = set(), None, 0, {}
-    for line in patch.splitlines():
-        if line.startswith("+++ "):
-            current = line[6:].strip() if line.startswith("+++ b/") else None
-            if current and (test_path.search(current) or not current.endswith(".py")):
-                current = None
-            if current:
-                changed.setdefault(current, set())
-            continue
-        if current is None:
-            continue
-        if line.startswith("@@"):
-            m = re.search(r"@@ -\d+(?:,\d+)? \+(\d+)", line)
-            new_no = int(m.group(1)) - 1 if m else 0
-        elif line.startswith("+") or line.startswith("-"):
-            if line.startswith("+"):
-                new_no += 1
-            changed[current].add(max(1, new_no))
-        elif line.startswith(" "):
-            new_no += 1
+    changed = {}
+    for path, kind, _text, no in patch_lines(patch):
+        if kind:
+            changed.setdefault(path, set()).add(max(1, no))
+    names = set()
     for path, nos in changed.items():
-        try:
-            with open(os.path.join(root, path), errors="replace") as handle:
-                lines = handle.read().splitlines()
-        except OSError:
+        lines = read_lines(root, path)
+        if lines is None:
             continue
-        defs = [(k + 1, len(t) - len(t.lstrip()), m.group(1)) for k, t in enumerate(lines)
-                for m in [re.match(r"\s*(?:async\s+)?def (\w+)\s*\(", t)] if m]
-        for no in nos:
-            owner = None
-            for d_no, d_indent, name in defs:
-                if d_no > no:
-                    break
-                if all(not t.strip() or len(t) - len(t.lstrip()) > d_indent for t in lines[d_no:no - 1]):
-                    owner = name
-            if owner:
-                names.add(owner)
+        defs = py_defs(lines)
+        names.update(owner[2] for no in nos if no <= len(lines) for owner in [def_owner(lines, defs, no)] if owner)
     return names
-
 
 def traceback_note(statement: str, root: str, patch: str) -> str:
     """When the statement shows a traceback and the change only touches its innermost function, point at the callers."""
