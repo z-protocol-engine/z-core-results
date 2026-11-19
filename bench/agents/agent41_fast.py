@@ -869,6 +869,8 @@ class Agent:
         self.pushed = False
         self.swept = False
         self.traced = False
+        self.hooked = False
+        self.examined = False
         self.money_wrapped = 0
         self.scratch = outside_scratch(root)
         self.summary = ""
@@ -1003,6 +1005,47 @@ class Agent:
             say("[TRACE-GATE] change only in the innermost traceback frame; callers shown")
         return note
 
+    def hook_gate(self, patch: str) -> str:
+        notes = hook_notes(patch)
+        if not notes:
+            return ""
+        say("[HOOK-GATE] public method replaced by a private hook")
+        return ("Not finished yet: " + "; ".join(notes) + ". The inherited public method may never reach the hook "
+                "for some inputs (read its source: early raise or return conditions). Call the public method on the "
+                "statement's inputs and on variants with more arguments or variables; if the inherited public method "
+                "blocks a case the statement needs, override the public method itself. Then call finish again.")
+
+    def example_gate(self, patch: str) -> str:
+        lines = issue_examples(self.statement)
+        if not lines or self.budget.left() < 240:
+            return ""
+        prelude = [l for l in lines if l.startswith(("import ", "from "))]
+        pkgs = [d for d in sorted(os.listdir(self.root)) if os.path.isfile(os.path.join(self.root, d, "__init__.py"))
+                and re.search(r"\b%s\b" % re.escape(d), self.statement)]
+        prelude = ["from %s import *" % pkgs[0]] + prelude if pkgs else prelude
+        patched = run_examples(self.root, lines, prelude)
+        base_tree = tempfile.mkdtemp(prefix="base-tree-")
+        try:
+            self.workspace.git(["worktree", "add", "-q", "--detach", base_tree, self.workspace.base], log=False)
+            base = run_examples(base_tree, lines, prelude)
+        except Exception as error:
+            say("[EXAMPLES] base tree unavailable: %s" % error)
+            base = None
+        finally:
+            try:
+                self.workspace.git(["worktree", "remove", "--force", base_tree], log=False)
+            except Exception:
+                shutil.rmtree(base_tree, ignore_errors=True)
+        flags = example_flags(base, patched)
+        if not flags:
+            return ""
+        say("[EXAMPLES] %d issue example(s) still look wrong" % len(flags))
+        return ("Not finished yet: the statement's own examples, run on your changed code, still look wrong:\n"
+                + "\n".join("  " + f for f in flags[:8])
+                + "\nCheck each against what the statement expects. An unevaluated result, a remaining error, or a "
+                "different answer when the operands are swapped usually means the fix is incomplete or sits in the "
+                "wrong place. Fix it, or explain why the output is right, then call finish again.")
+
     def finish_check(self, summary: str) -> str:
         missing = []
         for path in sorted(set(re.findall(r"(?<![\w.:/~-])(/[A-Za-z0-9_.\-/]+\.[A-Za-z0-9]{1,8})\b", self.statement))):
@@ -1035,7 +1078,8 @@ class Agent:
                         + "\nCreate them if they are deliverables (or confirm they are only inputs), then call finish again.")
         if changed and self.budget.left() > 120 and self.budget.money_left() > 0.02:
             patch = None
-            for flag, gate in (("swept", self.sweep_gate), ("traced", self.trace_gate)):
+            for flag, gate in (("swept", self.sweep_gate), ("traced", self.trace_gate),
+                               ("hooked", self.hook_gate), ("examined", self.example_gate)):
                 if getattr(self, flag):
                     continue
                 setattr(self, flag, True)
@@ -1510,6 +1554,136 @@ def traceback_note(statement: str, root: str, patch: str) -> str:
             "or the input unchanged), and make sure the reported example now takes that path and gives the "
             "result the statement asks for. Fix the caller instead if that is where the contract is broken. Then "
             "call finish again." % (inner, ", ".join(reversed(callers))))
+
+
+EXAMPLE_RUNNER = r"""
+import json, re, sys
+lines, prelude = json.load(open(sys.argv[1]))
+ns = {}
+for src in prelude:
+    try:
+        exec(src, ns)
+    except Exception:
+        pass
+def run(src, retry=True):
+    try:
+        try:
+            code = compile(src, "<issue>", "eval")
+        except SyntaxError:
+            exec(compile(src, "<issue>", "exec"), ns)
+            return ["stmt", "", ""]
+        value = eval(code, ns)
+        return ["value", type(value).__name__, repr(value)[:300]]
+    except BaseException as error:
+        missing = re.match(r"name '(\w+)' is not defined", str(error)) if isinstance(error, NameError) else None
+        if missing and retry:
+            # a typo in the report (Operators for Operator): retry once with the closest defined name
+            import difflib
+            close = difflib.get_close_matches(missing.group(1), [k for k in ns if not k.startswith("_")], 1, 0.85)
+            if close:
+                return run(re.sub(r"\b%s\b" % missing.group(1), close[0], src), False)
+        return ["error", type(error).__name__, str(error)[:200]]
+out = []
+for src in lines:
+    out.append([src] + run(src))
+    m = re.match(r"^\s*([A-Za-z_]\w*)\s*([*+&|@])\s*([A-Za-z_]\w*)\s*$", src)
+    if m and out[-1][1] == "value":
+        out[-1].append(run("%s %s %s" % (m.group(3), m.group(2), m.group(1))))
+print("@@RESULT@@" + json.dumps(out))
+"""
+
+def issue_examples(statement: str, limit: int = 25) -> list:
+    """Python lines of the statement's code blocks (REPL '>>>' lines when present), without outputs or comments."""
+    lines = []
+    for block in re.findall(r"```[\w+-]*[ \t]*\r?\n(.*?)```", statement.replace("\r\n", "\n"), re.S):
+        rows = block.splitlines()
+        if any(r.lstrip().startswith(">>> ") for r in rows):
+            current = None
+            for r in rows:
+                t = r.strip()
+                if t.startswith(">>> "):
+                    if current:
+                        lines.append(current)
+                    current = t[4:]
+                elif t.startswith("... ") and current is not None:
+                    current += "\n" + t[4:]
+                else:
+                    if current:
+                        lines.append(current)
+                    current = None
+            if current:
+                lines.append(current)
+        else:
+            for r in rows:
+                if r.startswith((" ", "\t")) or r.startswith(("Traceback", "File ")):
+                    continue
+                t = re.sub(r"\s+#.*$", "", r).strip()
+                if t and not t.startswith("#"):
+                    lines.append(t)
+    good = []
+    for line in lines:
+        try:
+            compile(line, "<issue>", "exec")
+        except SyntaxError:
+            continue
+        if line not in good:
+            good.append(line)
+    return good[:limit]
+
+
+def run_examples(tree: str, lines: list, prelude: list, timeout: float = 60.0):
+    python = shutil.which("python") or shutil.which("python3") or sys.executable
+    with tempfile.TemporaryDirectory(prefix="examples-") as tmp:
+        spec, script = os.path.join(tmp, "lines.json"), os.path.join(tmp, "run.py")
+        with open(spec, "w") as handle:
+            json.dump([lines, prelude], handle)
+        with open(script, "w") as handle:
+            handle.write(EXAMPLE_RUNNER)
+        try:
+            done = subprocess.run([python, script, spec], cwd=tree, capture_output=True, text=True, timeout=timeout,
+                                  env=dict(os.environ, PYTHONPATH=tree))
+        except subprocess.TimeoutExpired:
+            return None
+    marker = done.stdout.rfind("@@RESULT@@")
+    return json.loads(done.stdout[marker + 10:]) if marker >= 0 else None
+
+
+def example_flags(base, patched) -> list:
+    """Issue examples that still look broken after the change (no model call)."""
+    flags, quiet = [], ("NameError", "ImportError", "ModuleNotFoundError", "SyntaxError")
+    before = {row[0]: row for row in base or []}
+    for row in patched or []:
+        src, kind, name, text = row[:4]
+        old = before.get(src)
+        if kind == "error" and old and old[1] == "error" and old[2] == name and name not in quiet:
+            flags.append("%s\n    still raises %s: %s" % (src, name, text[:160]))
+            continue
+        head = re.match(r"^([A-Za-z_]\w*)\(.*\)\.\w+\([^()]*\)$", src, re.S)
+        if (kind == "value" and head and text.startswith(head.group(1) + "(")
+                and old and (old[1] == "error" or old[3] == text)):
+            flags.append("%s\n    still returns the unevaluated %s(...): %s" % (src, head.group(1), text[:160]))
+            continue
+        if kind == "value" and len(row) > 4 and row[4][0] == "value" and row[4][2] != text:
+            m = re.match(r"^\s*(\w+)\s*([*+&|@])\s*(\w+)\s*$", src)
+            if m:
+                flags.append("%s  ->  %s\n    but %s %s %s  ->  %s" % (src, text[:120], m.group(3), m.group(2), m.group(1),
+                                                                      row[4][2][:120]))
+    return flags
+
+
+def hook_notes(patch: str) -> list:
+    """Public methods the change replaced by a private hook (e.g. as_set -> _eval_as_set)."""
+    removed, added, notes = {}, {}, []
+    for path, kind, text, _no in patch_lines(patch):
+        m = DEF_LINE.match(text)
+        if m and kind:
+            (removed if kind == "-" else added).setdefault(path, set()).add(m.group(1))
+    for path, names in removed.items():
+        for name in sorted(n for n in names if not n.startswith("_")):
+            hooks = [h for h in added.get(path, ()) if h in ("_eval_" + name, "_" + name)]
+            if hooks and name not in added.get(path, ()):
+                notes.append("%s: public %s() removed, %s() added" % (path, name, hooks[0]))
+    return notes
 
 
 def valid_arguments(arguments) -> str:

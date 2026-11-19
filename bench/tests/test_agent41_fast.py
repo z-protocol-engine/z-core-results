@@ -145,3 +145,23 @@ def test_traceback_gate(tmp_path):
     assert "outer" in A.traceback_note(st, str(tmp_path), _diff(tmp_path))
     (tmp_path / "m.py").write_text(src.replace("return inner(x)", "return inner(x) if x else None"))
     assert A.traceback_note(st, str(tmp_path), _diff(tmp_path)) == ""
+
+
+def test_issue_examples_extraction():
+    st = "Bug\r\n```\r\nfrom m import F\r\nA = F(1)\r\nA * B # wrong\r\n```\n```py\n>>> f(x).doit()\nf(x)\n```"
+    assert A.issue_examples(st) == ["from m import F", "A = F(1)", "A * B", "f(x).doit()"]
+
+
+def test_example_flags():
+    base = [["Eq(b, c).simplify()", "error", "TypeError", "boom"], ["x.f()", "error", "ValueError", "v"]]
+    patched = [["Eq(b, c).simplify()", "value", "Equality", "Eq(b, c)"], ["x.f()", "error", "ValueError", "v"],
+               ["B * I", "value", "Mul", "B", ["value", "Mul", "I*B"]]]
+    flags = A.example_flags(base, patched)
+    assert len(flags) == 3 and "unevaluated" in flags[0] and "still raises" in flags[1] and "I * B" in flags[2]
+    assert A.example_flags(base, [["Eq(b, c).simplify()", "value", "BooleanTrue", "True"]]) == []
+
+
+def test_hook_notes():
+    patch = ("diff --git a/m.py b/m.py\n--- a/m.py\n+++ b/m.py\n@@ -1,2 +1,2 @@\n"
+             "-    def as_set(self):\n+    def _eval_as_set(self):\n")
+    assert A.hook_notes(patch) and A.hook_notes(patch.replace("_eval_as_set", "as_set")) == []
