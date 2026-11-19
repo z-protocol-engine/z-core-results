@@ -18,3 +18,17 @@ Constats :
 - Coût divisé par ~14, temps moyen −20 % pour `a41_norev`.
 
 Détails par tâche : `results/*.jsonl`. Reproduire : `python3 run_bench.py --variants a41_norev --instances ...`
+
+## 30 tâches sympy, luna uniquement (2 passages)
+
+| Variante | Résolues | Temps moy. | Temps méd. | Coût/tâche | Appels |
+|---|---|---|---|---|---|
+| a41_fast passage 1 | 18/30 | 134s | 115s | $0.0064 | 16.1 |
+| a41_fast passage 2 | 21/30 | 194s | 121s | $0.0066 | 16.9 |
+| a41_norev passage 1 | 19/30 | 106s | 85s | $0.0056 | 13.8 |
+| a41_look (second regard luna) | 19/30 | 239s | 223s | $0.0078 | 19.6 |
+
+- Le second regard luna a tourné sur 30/30 tâches et n'a modifié le patch que 2 fois (16450, 20154), déjà résolues sans lui : 0 tâche récupérée, +~110 s par tâche.
+- Seules 4 tâches changent d'issue d'un passage à l'autre (17318, 18698, 19495, 20801) : la variance porte sur ~±2 tâches ; 8 tâches échouent partout.
+- a41_norev du passage 2 exclu : un doublon de lanceur l'a exécuté deux fois en même temps dans le même dossier (mesures mélangées).
+- Dépense totale des 2 passages : $1.25, 3127 appels, 100 % openai/gpt-6-luna.
