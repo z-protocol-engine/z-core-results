@@ -119,3 +119,45 @@ Pour reproduire : `python3 bridge/run_bridge_task.py <tâche> <port> [agent41|ag
 - **Limites :**
   - Le pilote est Haiku, pas luna : ce banc mesure ce que la structure de l'agent apporte, pas le score que donnerait luna.
   - n=27.
+
+## Attaque des tâches ratées par les deux agents (17630, 19783, 20428, 20438, 23950)
+
+**Diagnostic, réalisé hors ligne sur les conversations enregistrées :**
+- **19783 :** `I*Dagger(A)` reste non simplifié. Le modèle l'avait affiché sans y réagir.
+- **20438 :** le correctif supprime seulement le plantage, et `Eq(b,c).simplify()` reste non évalué.
+- **23950 :** la méthode publique `as_set` est remplacée par le hook privé `_eval_as_set`, que la méthode de base bloque.
+- **17630 et 20428 :** le correctif est appliqué en aval du symptôme ; la cause racine se trouve dans le code du cœur.
+- **20438 :** le second test caché inverse un test existant que le ticket ne demande pas de changer. Il est inatteignable.
+
+**Deux nouveaux contrôles au `finish`, déterministes et sans appel modèle :**
+
+1. **Rejeu des exemples de l'énoncé.**
+   - Fonctionnement : les blocs de code (`>>>` ou nus) sont exécutés sur l'arbre de base, via un worktree git, puis sur l'arbre patché.
+   - Signalements :
+     - erreur de logique toujours levée ;
+     - résultat `F(...).m()` toujours non évalué ;
+     - `A op B` différent de `B op A`.
+   - Les coquilles du ticket sont corrigées par rapprochement de noms : `Operators` devient `Operator`.
+2. **Hook privé :** signale une méthode publique `X` supprimée au profit de `_eval_X` ou `_X`.
+
+**Rejeu sur les patchs enregistrés (`tests/example_replay.py`) :**
+- **Runs ratés signalés :**
+  - 19783 p2 ×2 et 20438 p2 ×2 par les exemples ;
+  - 23950 ×6 par le hook (2 runs du pont et 4 runs luna).
+- **Faux positifs sur les runs réussis :** 0/40 (pont) et 0/77 (luna). Le seul faux positif rencontré concernait 16792, avec une erreur de compilation cython due à l'environnement. Il a disparu une fois le signalement « erreur toujours levée » limité aux erreurs de logique Python.
+
+**Runs en direct :** agent41_fast pilote 2 passages sur chacune des 5 tâches.
+
+| Tâche | Avant (agent41_fast, passages précédents) | Après (2 passages) |
+|---|---|---|
+| 19783 | 1/2 | **2/2** |
+| 23950 | 0/2 | **2/2** |
+| 20438 | 0/2 (F2P 1/2 au mieux) | 0/2 (F2P 1/2 les 2 fois) |
+| 17630 | 0/1 | 0/2 |
+| 20428 | 0/1 | 0/2 |
+| **Total** | **1/8** | **4/10** |
+
+**Honnêteté :**
+- Les deux nouveaux contrôles **ne se sont pas déclenchés** pendant ces runs. Le modèle a trouvé la bonne forme avant d'arriver au `finish`. Le gain ne peut donc pas leur être attribué ; c'est vraisemblablement de la variance.
+- Ces 5 tâches ont servi à concevoir les contrôles : ce sont des résultats sur l'échantillon d'apprentissage.
+- Ce qui est démontré, c'est le rejeu : les contrôles attrapent 10 échecs enregistrés sans aucun faux positif.

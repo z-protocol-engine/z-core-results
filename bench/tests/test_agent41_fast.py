@@ -165,3 +165,8 @@ def test_hook_notes():
     patch = ("diff --git a/m.py b/m.py\n--- a/m.py\n+++ b/m.py\n@@ -1,2 +1,2 @@\n"
              "-    def as_set(self):\n+    def _eval_as_set(self):\n")
     assert A.hook_notes(patch) and A.hook_notes(patch.replace("_eval_as_set", "as_set")) == []
+
+
+def test_example_flags_ignore_environment_errors():
+    row = ["f = autowrap(e)", "error", "CodeWrapError", "setup.py build_ext failed"]
+    assert A.example_flags([row], [row]) == []

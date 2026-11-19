@@ -6,6 +6,8 @@
 | 17139 | agent41_fast | sympy__sympy-17139 | True | 2/2 | 67/67 | 7 | 239 | 0 |
 | 17318 | agent41_fast | old/sympy__sympy-17318 | True | 1/1 | 10/10 | 16 | 505 | 0 |
 | 17630 | agent41 | held/agent41__sympy__sympy-17630 | False | 1/2 | 19/19 | 14 | 157 | 0 |
+| 17630 | agent41_fast | attack_r1/agent41_fast__sympy__sympy-17630 | False | 1/2 | 19/19 | 17 | 242 | 1 |
+| 17630 | agent41_fast | attack_r2/agent41_fast__sympy__sympy-17630 | False | 1/2 | 19/19 | 16 | 258 | 1 |
 | 17630 | agent41_fast | held/agent41_fast__sympy__sympy-17630 | False | 1/2 | 19/19 | 14 | 206 | 1 |
 | 18211 | agent41 | held/agent41__sympy__sympy-18211 | True | 1/1 | 54/54 | 22 | 301 | 0 |
 | 18211 | agent41_fast | held/agent41_fast__sympy__sympy-18211 | True | 1/1 | 54/54 | 16 | 355 | 1 |
@@ -18,12 +20,18 @@
 | 19495 | agent41_fast | sympy__sympy-19495 | True | 1/1 | 8/8 | 6 | 110 | 0 |
 | 19783 | agent41 | agent41__sympy__sympy-19783 | True | 2/2 | 9/9 | 9 | 151 | 0 |
 | 19783 | agent41 | p2/agent41__sympy__sympy-19783 | False | 1/2 | 9/9 | 9 | 198 | 0 |
+| 19783 | agent41_fast | attack_r1/agent41_fast__sympy__sympy-19783 | True | 2/2 | 9/9 | 8 | 123 | 0 |
+| 19783 | agent41_fast | attack_r2/agent41_fast__sympy__sympy-19783 | True | 2/2 | 9/9 | 9 | 143 | 0 |
 | 19783 | agent41_fast | p2/agent41_fast__sympy__sympy-19783 | False | 1/2 | 9/9 | 6 | 168 | 0 |
 | 19783 | agent41_fast | sympy__sympy-19783 | True | 2/2 | 9/9 | 18 | 207 | 0 |
 | 20428 | agent41 | held/agent41__sympy__sympy-20428 | False | 0/1 | 154/154 | 15 | 184 | 0 |
+| 20428 | agent41_fast | attack_r1/agent41_fast__sympy__sympy-20428 | False | 0/1 | 154/154 | 14 | 256 | 0 |
+| 20428 | agent41_fast | attack_r2/agent41_fast__sympy__sympy-20428 | False | 0/1 | 154/154 | 9 | 253 | 0 |
 | 20428 | agent41_fast | held/agent41_fast__sympy__sympy-20428 | False | 0/1 | 154/154 | 18 | 245 | 0 |
 | 20438 | agent41 | agent41__sympy__sympy-20438 | False | 0/2 | 93/93 | 19 | 257 | 0 |
 | 20438 | agent41 | p2/agent41__sympy__sympy-20438 | False | 0/2 | 93/93 | 21 | 343 | 0 |
+| 20438 | agent41_fast | attack_r1/agent41_fast__sympy__sympy-20438 | False | 1/2 | 93/93 | 11 | 219 | 1 |
+| 20438 | agent41_fast | attack_r2/agent41_fast__sympy__sympy-20438 | False | 1/2 | 93/93 | 20 | 302 | 1 |
 | 20438 | agent41_fast | p2/agent41_fast__sympy__sympy-20438 | False | 0/2 | 93/93 | 19 | 349 | 1 |
 | 20438 | agent41_fast | sympy__sympy-20438 | False | 1/2 | 93/93 | 13 | 243 | 1 |
 | 20590 | agent41 | held/agent41__sympy__sympy-20590 | True | 1/1 | 21/21 | 12 | 145 | 0 |
@@ -52,6 +60,8 @@
 | 23824 | agent41_fast | held/agent41_fast__sympy__sympy-23824 | True | 1/1 | 2/2 | 11 | 125 | 0 |
 | 23950 | agent41 | agent41__sympy__sympy-23950 | False | 0/1 | 4/4 | 18 | 290 | 0 |
 | 23950 | agent41 | p2/agent41__sympy__sympy-23950 | True | 1/1 | 4/4 | 14 | 318 | 0 |
+| 23950 | agent41_fast | attack_r1/agent41_fast__sympy__sympy-23950 | True | 1/1 | 4/4 | 10 | 206 | 0 |
+| 23950 | agent41_fast | attack_r2/agent41_fast__sympy__sympy-23950 | True | 1/1 | 4/4 | 10 | 246 | 0 |
 | 23950 | agent41_fast | p2/agent41_fast__sympy__sympy-23950 | False | 0/1 | 4/4 | 11 | 278 | 0 |
 | 23950 | agent41_fast | sympy__sympy-23950 | False | 0/1 | 4/4 | 5 | 158 | 0 |
 | 24066 | agent41 | held/agent41__sympy__sympy-24066 | True | 1/1 | 30/30 | 13 | 123 | 0 |

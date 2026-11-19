@@ -1037,6 +1037,7 @@ class Agent:
             except Exception:
                 shutil.rmtree(base_tree, ignore_errors=True)
         flags = example_flags(base, patched)
+        say("[EXAMPLES] %d statement line(s) replayed on base and patched trees, %d flagged" % (len(lines), len(flags)))
         if not flags:
             return ""
         say("[EXAMPLES] %d issue example(s) still look wrong" % len(flags))
@@ -1650,12 +1651,15 @@ def run_examples(tree: str, lines: list, prelude: list, timeout: float = 60.0):
 
 def example_flags(base, patched) -> list:
     """Issue examples that still look broken after the change (no model call)."""
-    flags, quiet = [], ("NameError", "ImportError", "ModuleNotFoundError", "SyntaxError")
+    flags = []
+    # only logic errors count: a failing compiler or missing tool in this container is not the fix's fault
+    logic = ("TypeError", "ValueError", "AttributeError", "IndexError", "KeyError", "ZeroDivisionError",
+             "RecursionError", "NotImplementedError", "AssertionError", "UnboundLocalError")
     before = {row[0]: row for row in base or []}
     for row in patched or []:
         src, kind, name, text = row[:4]
         old = before.get(src)
-        if kind == "error" and old and old[1] == "error" and old[2] == name and name not in quiet:
+        if kind == "error" and old and old[1] == "error" and old[2] == name and name in logic:
             flags.append("%s\n    still raises %s: %s" % (src, name, text[:160]))
             continue
         head = re.match(r"^([A-Za-z_]\w*)\(.*\)\.\w+\([^()]*\)$", src, re.S)
