@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 import base64
+import difflib
 import json
 import os
 import re
-import shlex
 import shutil
 import signal
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import urllib.error
 import urllib.request
@@ -18,13 +17,13 @@ import urllib.request
 # General problem-solving agent: read the instruction, explore the working directory, build the
 # requested deliverable, check it, and hand back a unified diff of the working directory.
 
-DRIVER_MODEL = os.getenv("RIDGES_AGENT_MODEL", "openai/gpt-6-luna")
+DRIVER_MODEL = os.getenv("RIDGES_AGENT_MODEL") or "openai/gpt-6-luna"
 DRIVER_TEMPERATURE = 0.0
 REQUEST_SEED = 29
 # provider route proven in our agent.py; dropped for the rest of the run after a few failures
 PROVIDER_ROUTES = {"openai/gpt-6-luna": {"only": ["azure/eu"], "allow_fallbacks": False}}
 PROVIDER_FALLBACK_AFTER = 3
-CALL_TIMEOUT_SEC = 360.0
+CALL_TIMEOUT_SEC = 900.0
 REVIEW_EFFORT = "high"
 FALLBACK_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_WALL_SEC = 900.0
@@ -73,7 +72,8 @@ VIEWS_DROP_AT = 6
 JUNK_PATH = re.compile(
     r"(^|/)(__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache|\.cache|\.tox|\.ipynb_checkpoints)(/|$)"
     r"|\.(pyc|pyo)$|(^|/)\.DS_Store$|(^|/)nohup\.out$")
-GIVING_UP = re.compile(r"\b(not (yet )?(complete|done|finished|solved)|incomplete|did not manage|gave up)\b", re.I)
+GIVING_UP = re.compile(r"\b(partial(ly)?|not (yet )?(complete|done|finished|solved)|incomplete|could not|couldn't|"
+                       r"unable to|cannot be|can't be|did not manage|gave up|not possible)\b", re.I)
 PRICES = {
     "openai/gpt-6-luna": (0.11e-6, 0.55e-6),
     "~openai/gpt-luna-latest": (0.11e-6, 0.55e-6),
@@ -277,7 +277,7 @@ class Model:
             "reasoning": {"effort": self.effort, "exclude": True},
             "usage": {"include": True},
         }
-        if model == RELIEF_MODEL:
+        if model == RELIEF_MODEL and model != self.driver:
             # a cheap writer for the reply that did not fit: a whole long file costs cents, not dimes
             body["max_tokens"] = RELIEF_MODEL_TOKENS
             del body["reasoning"]
@@ -345,6 +345,7 @@ class Model:
                            self.budget.left(), choices[0].get("finish_reason"), usage.get("prompt_tokens"),
                            details.get("cached_tokens"), usage.get("completion_tokens")))
                     self.answered = True
+                    self.route_failures = 0
                     message["_finish"] = choices[0].get("finish_reason") or ""
                     message["_model"] = model
                     self.relief = RELIEF_CALLS if message["_finish"] == "length" else max(0, self.relief - 1)
@@ -356,7 +357,8 @@ class Model:
                     except Exception:
                         pass
                     last = "HTTP %s %s" % (error.code, text)
-                    if error.code in (400, 404, 429, 502, 503) and PROVIDER_ROUTES.get(model):
+                    if (PROVIDER_ROUTES.get(model) and (error.code in (502, 503) or (error.code in (400, 404) and
+                            re.search(r"provider|endpoint|route", text, re.I)))):
                         self.route_failures += 1
                         if self.route_failures == PROVIDER_FALLBACK_AFTER:
                             say("[ROUTE] provider route dropped after %d failures" % self.route_failures)
@@ -689,11 +691,6 @@ class Shell:
             try:
                 process.wait(timeout=limit)
                 note = "\n[exit code %d]" % process.returncode
-                try:
-                    # children left behind with & would keep running and slow everything after
-                    os.killpg(process.pid, signal.SIGKILL)
-                except Exception:
-                    pass
             except subprocess.TimeoutExpired:
                 try:
                     os.killpg(os.getpgid(process.pid), signal.SIGKILL)
@@ -816,6 +813,24 @@ So:
   or statement already use. A module that merely happens to be importable in your session may be missing where the
   deliverable runs later.
 
+When the task is a change to an existing codebase (a bug report or a feature request), hidden tests will check the
+behaviour the maintainers would expect, on more cases than the report shows:
+- Fix the cause, at the most general layer that produces the wrong behaviour (the shared helper, base class or
+  dispatcher), not only the entry point used in the example. Where the bad input is created matters more than where
+  it crashes: if a helper fails on input its contract excludes, make the caller stop producing that input.
+- Prefer removing or correcting the faulty logic over adding special-case branches around it. Keep the change small
+  and in the code's own style; do not rename or restructure public methods the report did not ask about.
+- Before finishing, sweep for siblings: every other definition, method, format string, regex class, operand order
+  or related property that shares the pattern you changed (for example, letters and digits; all printers of one
+  object; a == b and b == a). Fix each one the same way, or know why it differs.
+- Existing tests that assert the old, reported behaviour are outdated: update them to the corrected behaviour.
+  Never narrow a principled fix with "except when ..." just to keep an outdated assertion passing.
+- When the report hedges about the expected result ("I assume", "should it be ...?", "not sure"), decide it from
+  consistency with analogous cases in the report and the codebase's existing conventions, not from the guess.
+- Look at how similar cases are already handled in the code (and in git log -p for the touched function) before
+  inventing a new mechanism. Test variants beyond the example: other members of the family, both orders, edge
+  values, multi-variable or composite inputs.
+
 Way of working:
 1. Read the task statement carefully. Write down the exact deliverables, paths, formats, interfaces, and every
    stated requirement and constraint.
@@ -845,6 +860,7 @@ class Agent:
         self.finish_asks = 0
         self.reviewed = False
         self.pushed = False
+        self.swept = False
         self.money_wrapped = 0
         self.scratch = outside_scratch(root)
         self.summary = ""
@@ -892,16 +908,16 @@ class Agent:
             path = self.resolve(args.get("path"))
             old, new = str(args.get("old_text") or ""), str(args.get("new_text") or "")
             try:
-                with open(path, "r", errors="surrogateescape") as handle:
+                with open(path, "r", errors="surrogateescape", newline="") as handle:
                     text = handle.read()
             except OSError as error:
                 return "error: %s" % error
-            hits = text.count(old) if old else 0
-            if hits != 1:
-                return "error: old_text found %d times; it must match exactly once" % hits
-            with open(path, "w", errors="surrogateescape") as handle:
-                handle.write(text.replace(old, new, 1))
-            return "edited %s" % path + self.syntax_note(path)
+            result, note = tolerant_replace(text, old, new)
+            if result is None:
+                return "error: " + note + ". Nothing was changed."
+            with open(path, "w", errors="surrogateescape", newline="") as handle:
+                handle.write(result)
+            return "edited %s" % path + note + self.syntax_note(path)
         if name == "view_file":
             return self.view_file(self.resolve(args.get("path")))
         if name == "finish":
@@ -944,12 +960,25 @@ class Agent:
             done = subprocess.run([sys.executable, "-m", "py_compile", path], capture_output=True)
             if done.returncode != 0:
                 return "\nWARNING: the file does not compile:\n" + clip(done.stderr.decode("utf-8", "replace"), 1500)
+            return ""
+        tool = SYNTAX_TOOLS.get(os.path.splitext(path)[1].lower())
+        if tool and shutil.which(tool[0]):
+            try:
+                done = subprocess.run(tool + [path], capture_output=True, timeout=30)
+            except Exception:
+                return ""
+            if done.returncode != 0:
+                text = (done.stderr or done.stdout).decode("utf-8", "replace")
+                return "\nWARNING: %s reports a syntax error:\n%s" % (tool[0], clip(text, 1500))
         return ""
 
     def finish_check(self, summary: str) -> str:
         missing = []
-        for path in sorted(set(re.findall(r"(?<![\w.-])(/[A-Za-z0-9_.\-/]+\.[A-Za-z0-9]{1,8})\b", self.statement))):
-            if not os.path.abspath(path).startswith(os.path.abspath(self.root) + os.sep):
+        for path in sorted(set(re.findall(r"(?<![\w.:/~-])(/[A-Za-z0-9_.\-/]+\.[A-Za-z0-9]{1,8})\b", self.statement))):
+            # URLs (https://host/x.y), system paths and paths quoted from tracebacks of this repo are not deliverables
+            if path.startswith(("//", "/dev/", "/proc/", "/usr/", "/bin/", "/etc/", "/lib", "/opt/", "/home/")):
+                continue
+            if os.path.exists(os.path.join(self.root, path.lstrip("/"))):
                 continue
             if not os.path.exists(path):
                 missing.append(path)
@@ -972,6 +1001,19 @@ class Agent:
                         + ("\nPaths outside %s are not kept; make sure every deliverable you can place lives under %s."
                            % (self.root, self.root) if outside else "")
                         + "\nCreate them if they are deliverables (or confirm they are only inputs), then call finish again.")
+        if not self.swept and changed and self.budget.left() > 120 and self.budget.money_left() > 0.02:
+            self.swept = True
+            try:
+                notes = sibling_notes(self.root, self.workspace.patch())
+            except Exception as error:
+                say("[SWEEP] skipped: %s" % error)
+                notes = []
+            if notes:
+                say("[SWEEP] %d sibling(s) shown before finish" % len(notes))
+                return ("Not finished yet: these places share the pattern you changed but were left as they were:\n"
+                        + "\n".join("  " + n for n in notes)
+                        + "\nFor each, decide whether the same fix applies (hidden tests often check the siblings) "
+                        "and change it if so, or leave it if it truly differs. Then call finish again.")
         window = max(1.0, self.budget.deadline - self.budget.started)
         if (not self.pushed and GIVING_UP.search(summary) and self.budget.left() > window * 0.3
                 and self.budget.money_left() > 0.03):
@@ -1024,7 +1066,7 @@ class Agent:
         return "\n".join(rows)
 
     def transcript_size(self, messages: list) -> int:
-        return sum(len(json.dumps({k: v for k, v in m.items() if k != "reasoning_details"}))
+        return sum(len(json.dumps(m))
                    if not isinstance(m.get("content"), list) else 2000 for m in messages)
 
     def shrink(self, messages: list) -> None:
@@ -1119,7 +1161,9 @@ class Agent:
             if calls:
                 entry["tool_calls"] = [{"id": c.get("id") or "call_%d_%d" % (turn, i), "type": "function",
                                         "function": {"name": (c.get("function") or {}).get("name", ""),
-                                                     "arguments": valid_arguments((c.get("function") or {}).get("arguments"))}}
+                                                     "arguments": valid_arguments((c.get("function") or {}).get("arguments"))},
+                                        "_cut": valid_arguments((c.get("function") or {}).get("arguments"))
+                                        != ((c.get("function") or {}).get("arguments") or "{}")}
                                        for i, c in enumerate(calls)]
             messages.append(entry)
             if not calls:
@@ -1131,6 +1175,12 @@ class Agent:
                 continue
             for call in entry["tool_calls"]:
                 name = call["function"]["name"]
+                if call.pop("_cut", False):
+                    result = ("error: the arguments of this %s call were cut off (invalid JSON), so nothing was run. "
+                              "Send it again, shorter." % name)
+                    say("[TOOL] %s arguments cut off -> not run" % name)
+                    messages.append({"role": "tool", "tool_call_id": call["id"], "content": result})
+                    continue
                 try:
                     args = json.loads(call["function"]["arguments"] or "{}")
                     if not isinstance(args, dict):
@@ -1166,6 +1216,184 @@ def outside_scratch(root: str) -> str:
         shutil.rmtree(path, ignore_errors=True)
     return tempfile.mkdtemp(prefix="scratch-")
 
+
+SYNTAX_TOOLS = {
+    ".js": ["node", "--check"], ".mjs": ["node", "--check"], ".cjs": ["node", "--check"],
+    ".sh": ["bash", "-n"], ".bash": ["bash", "-n"],
+    ".rb": ["ruby", "-c"], ".php": ["php", "-l"], ".pl": ["perl", "-c"],
+    ".lua": ["luac", "-p"], ".go": ["gofmt", "-e"],
+}
+
+
+def reindent(lines: list, indent: str) -> list:
+    # shift a block so its first non-blank line starts at indent, keeping relative indentation
+    first = next((l for l in lines if l.strip()), "")
+    base = first[:len(first) - len(first.lstrip())]
+    out = []
+    for line in lines:
+        if not line.strip():
+            out.append("")
+        elif line.startswith(base):
+            out.append(indent + line[len(base):])
+        else:
+            out.append(indent + line.lstrip())
+    return out
+
+
+def tolerant_replace(text: str, old: str, new: str):
+    """Replace old by new once. Returns (new_text, note) or (None, error).
+
+    Stage 1 exact; stage 2 ignoring trailing spaces; stage 3 ignoring indentation (new is re-indented).
+    CRLF files are matched in LF and written back in CRLF."""
+    if not old:
+        return None, "old_text is empty"
+    crlf = "\r\n" in text and text.count("\r\n") == text.count("\n") and "\r\n" not in old
+    work = text.replace("\r\n", "\n") if crlf else text
+    back = (lambda t: t.replace("\n", "\r\n")) if crlf else (lambda t: t)
+    hits = work.count(old)
+    if hits == 1:
+        return back(work.replace(old, new, 1)), ""
+    lines = work.split("\n")
+    if hits > 1:
+        starts, pos = [], work.find(old)
+        while pos >= 0 and len(starts) < 8:
+            starts.append(work.count("\n", 0, pos) + 1)
+            pos = work.find(old, pos + 1)
+        return None, ("old_text found %d times (lines %s); add surrounding lines so it matches exactly once"
+                      % (hits, ", ".join(map(str, starts))))
+    old_lines = old.split("\n")
+    if old_lines and old_lines[-1] == "":
+        old_lines = old_lines[:-1]
+    new_lines = new.split("\n")
+    if new_lines and new_lines[-1] == "" and old.endswith("\n"):
+        new_lines = new_lines[:-1]
+    n = len(old_lines)
+    # stage 2: trailing whitespace ignored
+    want = [l.rstrip() for l in old_lines]
+    found = [i for i in range(len(lines) - n + 1) if [l.rstrip() for l in lines[i:i + n]] == want]
+    if len(found) == 1:
+        i = found[0]
+        lines[i:i + n] = new_lines
+        return back("\n".join(lines)), " (matched ignoring trailing spaces at line %d)" % (i + 1)
+    # stage 3: indentation ignored, then the replacement is re-indented to the file's indentation
+    want = [l.strip() for l in old_lines if l.strip()]
+    if len(found) == 0 and len(want) >= 2:
+        matches = []
+        for i in range(len(lines)):
+            if lines[i].strip() != want[0]:
+                continue
+            got, j = [], i
+            while len(got) < len(want) and j < len(lines):
+                if lines[j].strip():
+                    got.append(lines[j].strip())
+                j += 1
+            if got == want:
+                matches.append((i, j))
+        if len(matches) == 1:
+            i, j = matches[0]
+            indent = lines[i][:len(lines[i]) - len(lines[i].lstrip())]
+            lines[i:j] = reindent(new_lines, indent)
+            return back("\n".join(lines)), " (matched ignoring indentation at line %d; new_text re-indented)" % (i + 1)
+        if len(matches) > 1:
+            return None, "old_text matches %d places when indentation is ignored; add surrounding lines" % len(matches)
+    if len(found) > 1:
+        return None, "old_text matches %d places when trailing spaces are ignored; add surrounding lines" % len(found)
+    # no match: point at the closest line so the next try is right
+    probe = next((l.strip() for l in old_lines if l.strip()), "")
+    best = difflib.get_close_matches(probe, [l.strip() for l in lines], n=1, cutoff=0.6) if probe else []
+    hint = ""
+    if best:
+        line_no = next(k for k, l in enumerate(lines) if l.strip() == best[0]) + 1
+        hint = "; closest line %d is: %s" % (line_no, clip(lines[line_no - 1], 300))
+    return None, "old_text not found (even ignoring whitespace); re-read the file before editing" + hint
+
+
+def sibling_notes(root: str, patch: str, limit: int = 8) -> list:
+    """Places in the touched files that share the pattern of the change but were left unchanged (no model call).
+
+    1. other definitions, in the same file, of a function or method the change edited (e.g. one _latex of three);
+    2. ASCII regex character classes ([0-9], [a-z]...) left next to a class the change replaced."""
+    test_path = re.compile(r"(^|/)(tests?|testing)(/|_)|_test\.py$")
+    files, removed_classes, added_classes, current, new_no = {}, set(), set(), None, 0
+    literal = re.compile(r'"((?:[^"\\\n]|\\.)*)"|\'((?:[^\'\\\n]|\\.)*)\'')
+    shapes = []  # punctuation sets of the string literals the change rewrote
+    char_class = re.compile(r"\[\^?[^\[\]\s]{1,24}\]")
+    for line in patch.splitlines():
+        if line.startswith("+++ "):
+            current = line[6:].strip() if line.startswith("+++ b/") else None
+            if current and (test_path.search(current) or not current.endswith(".py")):
+                current = None
+            if current:
+                files.setdefault(current, set())
+            continue
+        if current is None:
+            continue
+        if line.startswith("@@"):
+            m = re.search(r"@@ -\d+(?:,\d+)? \+(\d+)", line)
+            new_no = int(m.group(1)) - 1 if m else 0
+        elif line.startswith("+"):
+            new_no += 1
+            files[current].add(new_no)
+            added_classes.update(char_class.findall(line[1:]))
+        elif line.startswith("-"):
+            removed_classes.update(char_class.findall(line[1:]))
+            for a, b in literal.findall(line[1:]):
+                shape = set(re.sub(r"[\w\s]", "", a or b))
+                if len(shape) >= 3:
+                    shapes.append(shape)
+        elif line.startswith(" "):
+            new_no += 1
+    notes = []
+    replaced = removed_classes - added_classes
+    ascii_class = re.compile(r"\[(?:a-z|A-Z|0-9|a-zA-Z|A-Za-z|a-zA-Z0-9|A-Za-z0-9|0-9a-zA-Z|a-zA-Z0-9_|A-Za-z0-9_)[^\]]*\]")
+    for path, changed in files.items():
+        try:
+            with open(os.path.join(root, path), errors="replace") as handle:
+                lines = handle.read().splitlines()
+        except OSError:
+            continue
+        defs = [(k + 1, len(t) - len(t.lstrip()), m.group(1)) for k, t in enumerate(lines)
+                for m in [re.match(r"\s*(?:async\s+)?def (\w+)\s*\(", t)] if m]
+        edited = set()
+        for no in changed:
+            if not (0 < no <= len(lines)) or not lines[no - 1].strip():
+                continue
+            indent = len(lines[no - 1]) - len(lines[no - 1].lstrip())
+            owner = None
+            for d_no, d_indent, name in defs:
+                if d_no > no:
+                    break
+                if d_no == no or d_indent < indent:
+                    owner = (d_no, d_indent, name)
+            if owner:
+                edited.add(owner)
+        for d_no, _indent, name in sorted(edited):
+            if name.startswith("__") or name.startswith("test"):
+                continue
+            others = [(n, t) for n, t, nm in defs if nm == name and n != d_no and (n, t, nm) not in edited]
+            if len(others) > 4 and shapes:
+                # many same-name methods: keep those that build a string shaped like the one the change rewrote
+                def similar(n, defs=defs, lines=lines):
+                    end = next((m for m, _, _ in defs if m > n), len(lines) + 1)
+                    body = "\n".join(lines[n:end - 1][:12])
+                    for a, b in literal.findall(body):
+                        got = set(re.sub(r"[\w\s]", "", a or b))
+                        if any(len(got & sh) / len(got | sh) >= 0.75 for sh in shapes if got):
+                            return True
+                    return False
+                others = [(n, t) for n, t in others if similar(n)]
+            if 0 < len(others) <= 4:
+                for n, _ in others:
+                    notes.append("%s:%d  %s   (same-name sibling of the %s you changed at line %d)"
+                                 % (path, n, lines[n - 1].strip()[:120], name, d_no))
+        if replaced:
+            for no in sorted(changed):
+                if 0 < no <= len(lines):
+                    for cls in ascii_class.findall(lines[no - 1]):
+                        if cls not in replaced:
+                            notes.append("%s:%d  %s   (you replaced %s here but %s is unchanged)"
+                                         % (path, no, lines[no - 1].strip()[:120], "/".join(sorted(replaced)), cls))
+    return list(dict.fromkeys(notes))[:limit]
 
 def valid_arguments(arguments) -> str:
     # arguments cut off mid-JSON would be replayed every turn and can make the provider refuse the whole request
