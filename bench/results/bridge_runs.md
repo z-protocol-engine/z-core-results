@@ -1,0 +1,22 @@
+| tâche | agent | run | résolu | F2P | P2P | tours | s | sweep |
+|---|---|---|---|---|---|---|---|---|
+| 17139 | agent41 | agent41__sympy__sympy-17139 | True | 2/2 | 67/67 | 11 | 236 | 0 |
+| 17139 | agent41_fast | sympy__sympy-17139 | True | 2/2 | 67/67 | 7 | 239 | 0 |
+| 17318 | agent41_fast | old/sympy__sympy-17318 | True | 1/1 | 10/10 | 16 | 505 | 0 |
+| 18698 | agent41_fast | old/sympy__sympy-18698 | True | 1/1 | 147/147 | 17 | 976 | 0 |
+| 19495 | agent41 | agent41__sympy__sympy-19495 | False | 0/1 | 8/8 | 16 | 197 | 0 |
+| 19495 | agent41_fast | sympy__sympy-19495 | True | 1/1 | 8/8 | 6 | 110 | 0 |
+| 19783 | agent41 | agent41__sympy__sympy-19783 | True | 2/2 | 9/9 | 9 | 151 | 0 |
+| 19783 | agent41_fast | sympy__sympy-19783 | True | 2/2 | 9/9 | 18 | 207 | 0 |
+| 20438 | agent41 | agent41__sympy__sympy-20438 | False | 0/2 | 93/93 | 19 | 257 | 0 |
+| 20438 | agent41_fast | sympy__sympy-20438 | False | 1/2 | 93/93 | 13 | 243 | 1 |
+| 20801 | agent41 | agent41__sympy__sympy-20801 | True | 1/1 | 96/96 | 10 | 160 | 0 |
+| 20801 | agent41_fast | sympy__sympy-20801 | True | 1/1 | 96/96 | 13 | 269 | 0 |
+| 20916 | agent41_fast | old/sympy__sympy-20916 | True | 1/1 | 1/1 | 13 | 116 | 0 |
+| 20916 | agent41_fast | v1_20916 | False | 0/1 | 1/1 | 9 | 92 | 1 |
+| 21930 | agent41_fast | old/sympy__sympy-21930 | True | 6/6 | 45/45 | 11 | 181 | 1 |
+| 21930 | agent41_fast | v1_21930 | False | 5/6 | 45/45 | 14 | 605 | 1 |
+| 22914 | agent41 | agent41__sympy__sympy-22914 | True | 1/1 | 17/17 | 12 | 123 | 0 |
+| 22914 | agent41_fast | sympy__sympy-22914 | True | 1/1 | 17/17 | 8 | 91 | 0 |
+| 23950 | agent41 | agent41__sympy__sympy-23950 | False | 0/1 | 4/4 | 18 | 290 | 0 |
+| 23950 | agent41_fast | sympy__sympy-23950 | False | 0/1 | 4/4 | 5 | 158 | 0 |

@@ -64,3 +64,34 @@ Détails par tâche : `results/*.jsonl`. Reproduire : `python3 run_bench.py --va
   Sur 20916, il pointe exactement la correction de référence.
 
 **Tests hors ligne :** 12 tests unitaires et un test de bout en bout, `tests/e2e_offline.py`. Ce test fait tourner l'agent sur sympy-23950 avec un faux modèle (`fake_model.py`) qui rejoue des réponses écrites à l'avance, puis vérifie que la tâche est résolue par les tests officiels.
+
+## Bancs avec mes propres modèles (pont vers des sous-agents Claude Haiku, 0 appel OpenRouter)
+
+`bench/bridge/` : le faux serveur transmet chaque requête de l'agent à un sous-agent Claude Haiku. Celui-ci joue le rôle du modèle et ne touche au code qu'avec les outils de l'agent. La notation se fait avec les tests officiels. Les deux agents sont pilotés par le même modèle, à l'aveugle : le sous-agent ne sait pas quelle version il pilote.
+
+**A/B agent 41 d'origine contre agent41_fast, sur 7 tâches**
+
+| Tâche | Jeu | agent41 | agent41_fast |
+|---|---|---|---|
+| 17139 | tâche mise de côté | ✅ 11 tours | ✅ 7 tours |
+| 19783 | tâche mise de côté | ✅ 9 | ✅ 18 |
+| 22914 | tâche mise de côté | ✅ 12 | ✅ 8 |
+| 19495 | dure, déjà analysée | ❌ 16 | ✅ 6 |
+| 20438 | dure, déjà analysée | ❌ F2P 0/2, 19 | ❌ F2P 1/2, 13 |
+| 20801 | dure, déjà analysée | ✅ 10 | ✅ 13 |
+| 23950 | dure, déjà analysée | ❌ 18 | ❌ 5 |
+| **Total** | | **4/7, 95 tours, 1414 s** | **5/7, 70 tours, 1317 s** |
+
+- Comportements observés sur l'original :
+  - Sur 17139, 20438 et 23950, il refuse 2 fois le `finish` à cause d'un faux positif : chemins d'un traceback ou URL github pris pour des livrables manquants. agent41_fast corrige ce défaut.
+  - Il impose une revue puis un second regard. Résultat : plus de tours, sans gain mesuré.
+- **Précautions de lecture :**
+  - L'échantillon est petit (n=7).
+  - Les 4 tâches dures font partie des 30 tâches dont les échecs ont servi à écrire les consignes. Ce sont des résultats sur l'échantillon d'apprentissage.
+  - Haiku résout toutes les tâches faciles, quel que soit l'agent.
+- **Runs isolés d'agent41_fast sur les tâches qui avaient servi à concevoir le balayage :**
+  - 21930 : non résolu en v1 (5/6). Résolu en v2 (6/6), une fois que le message du balayage demande de mettre à jour les tests périmés.
+  - 20916 : non résolu en v1. Le run v2 réussi est **faussé** : les consignes contenaient un exemple tiré de cette tâche, retiré depuis.
+  - 17318 et 18698 : résolus.
+
+Pour reproduire : `python3 bridge/run_bridge_task.py <tâche> <port> [agent41|agent41_fast]`, un sous-agent qui pilote `bridge/bridge_cli.py`, puis `python3 bridge/summary.py`.
