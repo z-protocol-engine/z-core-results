@@ -1,6 +1,7 @@
 """Run agent41_fast on one bench task with a Claude sub-agent as its model (through the bridge), then grade it.
 
-usage: python run_bridge_task.py INSTANCE PORT [AGENT]   (AGENT = agents/<AGENT>.py, default agent41_fast)
+usage: python run_bridge_task.py INSTANCE PORT [AGENT] [LABEL]   (AGENT = agents/<AGENT>.py, default agent41_fast;
+       results in /home/user/bench_work/bridge/[LABEL/]<AGENT>__<INSTANCE>/)
 """
 import json
 import os
@@ -16,9 +17,10 @@ import run_bench  # noqa: E402
 iid = sys.argv[1] if "__" in sys.argv[1] else "sympy__sympy-" + sys.argv[1]
 agent_name = sys.argv[3] if len(sys.argv) > 3 else "agent41_fast"
 port = int(sys.argv[2])
-out = "/home/user/bench_work/bridge/%s__%s" % (agent_name, iid) if agent_name != "agent41_fast" else "/home/user/bench_work/bridge/" + iid
+label = sys.argv[4] if len(sys.argv) > 4 else ""
+out = "/home/user/bench_work/bridge/%s%s__%s" % (label + "/" if label else "", agent_name, iid)
 subprocess.run(["rm", "-rf", out])
-os.makedirs(out + "/ipc")
+os.makedirs(out + "/ipc", exist_ok=True)
 server = subprocess.Popen([sys.executable, os.path.join(HERE, "bridge_model.py"), str(port), out + "/ipc"])
 time.sleep(1)
 row = {r["instance_id"]: r for r in json.load(open(run_bench.DATA))}[iid]
