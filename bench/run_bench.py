@@ -27,10 +27,9 @@ UPLOAD = "/root/.claude/uploads/a63ec59c-ecd4-5293-81db-49757466a820/ed18c4e8-ag
 
 LUNA = "openai/gpt-6-luna"
 VARIANTS = {
-    # agent 41 unchanged except models that exist here: driver -> luna, second look -> sonnet-4.6, relief off
+    # agent 41 unchanged except every model forced to luna (luna only: no Sonnet, no Haiku)
     "a41_luna": {"file": os.path.join(HERE, "agents", "agent41.py"),
-                 "overrides": {"DRIVER_MODEL": LUNA, "SECOND_LOOK_MODEL": "anthropic/claude-sonnet-4.6",
-                               "RELIEF_MODEL": LUNA}},
+                 "overrides": {"DRIVER_MODEL": LUNA, "SECOND_LOOK_MODEL": LUNA, "RELIEF_MODEL": LUNA}},
     "a41_fast": {"file": os.path.join(HERE, "agents", "agent41_fast.py"), "overrides": {}},
     # same, without the forced review round before finish
     "a41_norev": {"file": os.path.join(HERE, "agents", "agent41_fast.py"), "overrides": {"REVIEW_MIN_SEC": 1e9}},

@@ -17,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 UPSTREAM = "https://openrouter.ai"
 LOGDIR = sys.argv[2] if len(sys.argv) > 2 else "logs"
 LOCK = threading.Lock()
+ALLOWED = set(filter(None, (os.environ.get("BENCH_ALLOWED_MODELS") or "openai/gpt-6-luna").split(",")))
 
 
 def context():
@@ -48,6 +49,15 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 body = json.loads(data)
                 model = body.get("model", "")
+                if ALLOWED and model not in ALLOWED:
+                    # luna only: any other model is refused here and never reaches OpenRouter
+                    refusal = json.dumps({"error": {"message": "model %s not allowed by bench proxy" % model}}).encode()
+                    self.send_response(403)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(refusal)))
+                    self.end_headers()
+                    self.wfile.write(refusal)
+                    return
                 body["usage"] = {"include": True}
                 data = json.dumps(body).encode()
             except ValueError:

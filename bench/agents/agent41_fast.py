@@ -83,8 +83,6 @@ PRICES = {
     "openai/gpt-6-luna": (0.11e-6, 0.55e-6),
     "~openai/gpt-luna-latest": (0.11e-6, 0.55e-6),
     "openai/gpt-6-luna-pro": (0.11e-6, 0.55e-6),
-    "anthropic/claude-haiku-5.5": (0.11e-6, 0.55e-6),
-    "anthropic/claude-sonnet-5.5": (2.2e-6, 11e-6),
     "openai/gpt-6.1-sol": (2.2e-6, 11e-6),
 }
 
