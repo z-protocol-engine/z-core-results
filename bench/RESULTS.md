@@ -161,3 +161,30 @@ Pour reproduire : `python3 bridge/run_bridge_task.py <tâche> <port> [agent41|ag
 - Les deux nouveaux contrôles **ne se sont pas déclenchés** pendant ces runs. Le modèle a trouvé la bonne forme avant d'arriver au `finish`. Le gain ne peut donc pas leur être attribué ; c'est vraisemblablement de la variance.
 - Ces 5 tâches ont servi à concevoir les contrôles : ce sont des résultats sur l'échantillon d'apprentissage.
 - Ce qui est démontré, c'est le rejeu : les contrôles attrapent 10 échecs enregistrés sans aucun faux positif.
+
+## Correction à la racine de 17630 et 20428
+
+**Contrôle « réparation après coup » (`repair_notes` + `repair_gate`), déterministe et sans appel modèle.** Il signale les patchs qui corrigent une valeur après qu'elle a été produite :
+- un `return X` devenu `return f(X)` ;
+- un `x = strip(x)` ;
+- un remplacement conditionnel d'entrées calculées par un objet zéro ou vide ;
+- un retrait à la main des zéros de tête.
+
+Le message demande de remonter au premier appel qui produit la mauvaise valeur et de corriger cet appel lui-même, même dans un module du cœur. Si c'est un test (nullité, égalité) qui se trompe sur la valeur, c'est ce test qu'il faut corriger.
+
+Rejoué sur tous les patchs enregistrés : il signale 16 runs ratés et **0 des 125 runs réussis**.
+
+**Runs en direct (agent41_fast, pilote Haiku) :**
+
+| Version | 17630 | 20428 |
+|---|---|---|
+| Toutes les versions précédentes (les deux agents) | 0/9 | 0/7 |
+| Contrôle avec le 1er message | 0/3 | 0/3 |
+| Message renforcé | **3/6** (s2, t2, t3) | **1/6** (s2) |
+
+- **17630 résolu :** correction du postprocesseur d'`Add` dans `matexpr.py`. C'est le producteur réel : une somme de `ZeroMatrix` donnait un `0` scalaire.
+  - Le contrôle s'est déclenché dans les runs s2 et t3. En t2, le modèle a trouvé le producteur seul.
+  - Le pilote du run s2 a lu des fichiers du dépôt hors protocole (lecture seule).
+- **20428 résolu en s2 :** correction de `Expression.__bool__`, le test de nullité du domaine EX. Les `strip` ajoutés en aval ont ensuite été retirés.
+  - Dans les 5 autres runs, le contrôle s'est déclenché 4 fois, et le modèle a chaque fois justifié son `strip` en aval.
+- **Réserve :** ces deux tâches ont servi à concevoir le contrôle et à écrire son message. Ce sont des résultats sur l'échantillon d'apprentissage, avec n=6.
