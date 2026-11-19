@@ -869,6 +869,7 @@ class Agent:
         self.reviewed = False
         self.pushed = False
         self.swept = False
+        self.traced = False
         self.money_wrapped = 0
         self.scratch = outside_scratch(root)
         self.summary = ""
@@ -1024,7 +1025,18 @@ class Agent:
                         + "\nHidden tests usually check the same behaviour on these siblings. Apply the same change to "
                         "each one, unless a command you run shows that the generalized form breaks something (try it: "
                         "make the change, run the report's example and the existing tests). A belief that a sibling "
-                        "is 'deliberate' is not enough. Then call finish again.")
+                        "is 'deliberate' is not enough, and an existing test that asserts a sibling's old output is outdated by "
+                        "your fix: update that test rather than reverting the sibling. Then call finish again.")
+        if not self.traced and changed and self.budget.left() > 120 and self.budget.money_left() > 0.02:
+            self.traced = True
+            try:
+                note = traceback_note(self.statement, self.root, self.workspace.patch())
+            except Exception as error:
+                say("[TRACE-GATE] skipped: %s" % error)
+                note = ""
+            if note:
+                say("[TRACE-GATE] change only in the innermost traceback frame; callers shown")
+                return note
         window = max(1.0, self.budget.deadline - self.budget.started)
         if (not self.pushed and GIVING_UP.search(summary) and self.budget.left() > window * 0.3
                 and self.budget.money_left() > 0.03):
@@ -1421,6 +1433,75 @@ def sibling_notes(root: str, patch: str, limit: int = 8) -> list:
                             notes.append("%s:%d  %s   (you replaced %s here but %s is unchanged)"
                                          % (path, no, lines[no - 1].strip()[:120], "/".join(sorted(replaced)), cls))
     return list(dict.fromkeys(notes))[:limit]
+
+def edited_functions(root: str, patch: str) -> set:
+    """Names of the functions (outside tests) whose bodies the patch changes."""
+    test_path = re.compile(r"(^|/)(tests?|testing)(/|_)|_test\.py$")
+    names, current, new_no, changed = set(), None, 0, {}
+    for line in patch.splitlines():
+        if line.startswith("+++ "):
+            current = line[6:].strip() if line.startswith("+++ b/") else None
+            if current and (test_path.search(current) or not current.endswith(".py")):
+                current = None
+            if current:
+                changed.setdefault(current, set())
+            continue
+        if current is None:
+            continue
+        if line.startswith("@@"):
+            m = re.search(r"@@ -\d+(?:,\d+)? \+(\d+)", line)
+            new_no = int(m.group(1)) - 1 if m else 0
+        elif line.startswith("+") or line.startswith("-"):
+            if line.startswith("+"):
+                new_no += 1
+            changed[current].add(max(1, new_no))
+        elif line.startswith(" "):
+            new_no += 1
+    for path, nos in changed.items():
+        try:
+            with open(os.path.join(root, path), errors="replace") as handle:
+                lines = handle.read().splitlines()
+        except OSError:
+            continue
+        defs = [(k + 1, len(t) - len(t.lstrip()), m.group(1)) for k, t in enumerate(lines)
+                for m in [re.match(r"\s*(?:async\s+)?def (\w+)\s*\(", t)] if m]
+        for no in nos:
+            owner = None
+            for d_no, d_indent, name in defs:
+                if d_no > no:
+                    break
+                if all(not t.strip() or len(t) - len(t.lstrip()) > d_indent for t in lines[d_no:no - 1]):
+                    owner = name
+            if owner:
+                names.add(owner)
+    return names
+
+
+def traceback_note(statement: str, root: str, patch: str) -> str:
+    """When the statement shows a traceback and the change only touches its innermost function, point at the callers."""
+    frames = re.findall(r'File "([^"]+)", line \d+, in (\w+)', statement)
+    frames = [(path, name) for path, name in frames if name != "<module>" and not path.startswith("<")]
+    if len(frames) < 2:
+        return ""
+    edited = edited_functions(root, patch)
+    inner = frames[-1][1]
+    if not edited or edited != {inner}:
+        return ""
+    # only the symptom-guard pattern: an early exit added for empty/None input or a caught crash
+    added = [l[1:].strip() for l in patch.splitlines() if l.startswith("+") and not l.startswith("+++")]
+    guard = re.compile(r"^(if (not \w[\w.\[\]]*|\w[\w.]* is None|len\([^)]*\) *(==|<) *[01])\s*:|except \w*(Index|Key|Value|Type|ZeroDivision)\w*)")
+    if not any(guard.search(l) for l in added):
+        return ""
+    callers = list(dict.fromkeys(name for _, name in frames[:-1] if name != inner))[-3:]
+    if not callers:
+        return ""
+    return ("Not finished yet: your change only touches %s, the innermost frame of the traceback in the statement. "
+            "The callers above it (%s) are where the bad input was produced or the result is interpreted. Read "
+            "what each caller is documented to return when it cannot do its job (for example an empty list, None, "
+            "or the input unchanged), and make sure the reported example now takes that path and gives the "
+            "result the statement asks for. Fix the caller instead if that is where the contract is broken. Then "
+            "call finish again." % (inner, ", ".join(reversed(callers))))
+
 
 def valid_arguments(arguments) -> str:
     # arguments cut off mid-JSON would be replayed every turn and can make the provider refuse the whole request

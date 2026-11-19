@@ -135,3 +135,13 @@ def test_valid_arguments_lenient():
     assert A.valid_arguments('{"content": "a\tb"}') == '{"content": "a\tb"}'
     assert A.valid_arguments({"a": 1}) == '{"a": 1}'
     assert A.valid_arguments('{"summary": "half') == "{}"
+
+
+def test_traceback_gate(tmp_path):
+    src = "def inner(a):\n    return a[0]\n\ndef outer(x):\n    return inner(x)\n"
+    _repo(tmp_path, {"m.py": src})
+    (tmp_path / "m.py").write_text(src.replace("    return a[0]", "    if not a:\n        return None\n    return a[0]"))
+    st = 'Traceback:\n  File "m.py", line 5, in outer\n    return inner(x)\n  File "m.py", line 2, in inner\nIndexError'
+    assert "outer" in A.traceback_note(st, str(tmp_path), _diff(tmp_path))
+    (tmp_path / "m.py").write_text(src.replace("return inner(x)", "return inner(x) if x else None"))
+    assert A.traceback_note(st, str(tmp_path), _diff(tmp_path)) == ""

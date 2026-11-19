@@ -50,6 +50,10 @@ if cmd == "next":
         print("=== NOTE: the agent shortened the conversation (old turns trimmed); showing the latest messages ===")
         state["shown"] = max(0, len(messages) - 4)
     new = messages[state["shown"]:]
+    if not new and state.get("last_shown") == i:
+        print("REQUEST %d was already shown above and still needs your reply: send it with reply." % i)
+        sys.exit(0)
+    state["last_shown"] = i
     state["shown"] = len(messages)
     json.dump(state, open(state_path, "w"))
     if i == 0:
