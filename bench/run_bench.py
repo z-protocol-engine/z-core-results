@@ -33,6 +33,9 @@ VARIANTS = {
     "a41_fast": {"file": os.path.join(HERE, "agents", "agent41_fast.py"), "overrides": {}},
     # same, without the forced review round before finish
     "a41_norev": {"file": os.path.join(HERE, "agents", "agent41_fast.py"), "overrides": {"REVIEW_MIN_SEC": 1e9}},
+    # no review round, but a second look by luna itself in a fresh conversation (against run-to-run variance)
+    "a41_look": {"file": os.path.join(HERE, "agents", "agent41_fast.py"),
+                 "overrides": {"REVIEW_MIN_SEC": 1e9, "SECOND_LOOK_MIN_SEC": 180.0}},
     "zcore": {"file": "/home/user/ridges/agent.py", "overrides": {}},
 }
 
