@@ -1735,9 +1735,15 @@ def repair_notes(patch: str) -> list:
             if m:
                 notes.append("%s: %s is re-normalised with %s() after it was computed" % (path, m.group(1), m.group(2)))
         joined = " ".join(lines)
-        if " else " in joined and re.search(r"\bif (getattr\(\s*\w+\[[^\]]+\]|isinstance\(\s*\w+\[[^\]]+\]|"
-                                            r"\w+\[[^\]]+\]\.is_\w+)", joined):
+        if re.search(r"\belse\b", joined) and re.search(
+                r"\bif (getattr\(\s*\w+\[[^\]]+\]|isinstance\(\s*\w+\[[^\]]+\]|\w+\[[^\]]+\]\.is_\w+|"
+                r"\w+\[[^\]]+\]\s*(?:[!=]=|is not|is)\s*(?:0|None|S\.Zero|\w+\.zero)\b)", joined):
             notes.append("%s: entries of a computed result are replaced depending on their type" % path)
+        elif re.search(r"\bif (?:not )?isinstance\((\w+),[^)]*\):\s*\1 = \w*(?:Zero|Empty|Null|Identity)\w*\(|"
+                       r"\bif (\w+)\s*(?:[!=]=|is not|is)\s*(?:0|None|S\.Zero)\s*:\s*\2 = "
+                       r"\w*(?:Zero|Empty|Null|Identity)\w*\(", joined):
+            # a degenerate result (zero, empty) rebuilt as another object: typical downstream patch
+            notes.append("%s: a computed value is replaced by a new zero/empty object depending on its type" % path)
     return list(dict.fromkeys(notes))
 
 
