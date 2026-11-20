@@ -901,6 +901,7 @@ class Agent:
         self.edited = False
         self.pass_note = 0
         self.pass_turn = 0
+        self.early_review = False
         self.repaired = False
         self.money_wrapped = 0
         self.scratch = outside_scratch(root)
@@ -1029,6 +1030,27 @@ class Agent:
                 return "\nWARNING: %s reports a syntax error:\n%s" % (tool[0], clip(text, 1500))
         return ""
 
+    def run_gates(self, include_examples: bool) -> str:
+        """One-shot checks of the current change; the first that finds something returns its message."""
+        gates = [("swept", self.sweep_gate), ("traced", self.trace_gate), ("hooked", self.hook_gate),
+                 ("repaired", self.repair_gate)]
+        if include_examples:
+            gates.append(("examined", self.example_gate))
+        patch = None
+        for flag, gate in gates:
+            if getattr(self, flag):
+                continue
+            setattr(self, flag, True)
+            try:
+                patch = self.workspace.patch() if patch is None else patch
+                note = gate(patch)
+            except Exception as error:
+                say("[GATE] %s skipped: %s" % (flag, error))
+                note = ""
+            if note:
+                return note
+        return ""
+
     def sweep_gate(self, patch: str) -> str:
         notes = sibling_notes(self.root, patch)
         if not notes:
@@ -1141,21 +1163,9 @@ class Agent:
                            % (self.root, self.root) if outside else "")
                         + "\nCreate them if they are deliverables (or confirm they are only inputs), then call finish again.")
         if changed and self.budget.left() > 120 and self.budget.money_left() > 0.02:
-            patch = None
-            for flag, gate in (("swept", self.sweep_gate), ("traced", self.trace_gate),
-                               ("hooked", self.hook_gate), ("repaired", self.repair_gate),
-                               ("examined", self.example_gate)):
-                if getattr(self, flag):
-                    continue
-                setattr(self, flag, True)
-                try:
-                    patch = self.workspace.patch() if patch is None else patch
-                    note = gate(patch)
-                except Exception as error:
-                    say("[GATE] %s skipped: %s" % (flag, error))
-                    note = ""
-                if note:
-                    return note
+            note = self.run_gates(include_examples=True)
+            if note:
+                return note
         window = max(1.0, self.budget.deadline - self.budget.started)
         if (not self.pushed and GIVING_UP.search(summary) and self.budget.left() > window * 0.3
                 and self.budget.money_left() > 0.03):
@@ -1282,6 +1292,13 @@ class Agent:
                                  "and call finish." % self.status_line()})
             tools = TOOLS
             elapsed = 1.0 - left / window
+            if self.edited and not self.early_review and left > 120:
+                self.early_review = True
+                note = self.run_gates(include_examples=False)
+                if note:
+                    say("[EARLY-REVIEW] a finish check fired right after the first edit")
+                    messages.append({"role": "user", "content": "Check after your first edit. " + note.replace(
+                        "Not finished yet: ", "", 1).replace(" Then call finish again.", "") + " " + self.status_line()})
             if not self.edited and self.pass_note == 0 and (turn > LAST_PASS_TURN or elapsed >= LAST_PASS_SHARE):
                 self.pass_note = 1
                 self.pass_turn = turn
