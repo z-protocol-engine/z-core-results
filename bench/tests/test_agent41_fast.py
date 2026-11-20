@@ -193,3 +193,13 @@ def test_reply_tokens_follow_measured_speed():
     assert m.time_tokens() == A.MIN_REPLY_TOKENS
     m.budget.deadline = A.time.time() + 1000
     assert 14000 <= m.time_tokens() <= 15000
+
+
+def test_reasoning_per_model_and_no_think():
+    m = A.Model(A.Budget())
+    ling = "inclusionai/ling-3.2-flash:free"
+    assert "reasoning" not in m.body([{"role": "user", "content": "x"}], [], ling)
+    m.no_think = True
+    assert m.body([{"role": "user", "content": "x"}], [], ling)["reasoning"] == {"effort": "none"}
+    m.no_think = False
+    assert m.body([{"role": "user", "content": "x"}], [], A.DRIVER_MODEL)["reasoning"]["context"] == "all_turns"

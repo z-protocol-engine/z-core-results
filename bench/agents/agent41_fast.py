@@ -59,7 +59,8 @@ TRANSCRIPT_CAP = 600000
 LAST_PASS_TURN, LAST_PASS_SHARE = 20, 0.40
 FORCE_EDIT_AFTER, FORCE_EDIT_SHARE = 2, 0.60  # replies after the notice / share of the clock
 # per-model reasoning request; default {"effort": <level>, "context": "all_turns"} (luna)
-MODEL_REASONING = {"inclusionai/ling-3.2-flash:free": {"enabled": True}}
+# None = send no reasoning parameter (the model's own default; Ling thinks too long when pushed)
+MODEL_REASONING = {"inclusionai/ling-3.2-flash:free": None}
 SHRINK_TO = 0.6
 COMMAND_CEILING_SEC = 300.0
 COMMAND_SHARE = 0.3
@@ -250,6 +251,7 @@ class Model:
         self.driver = DRIVER_MODEL
         self.guard_share = GUARD_SHARE
         self.route_failures = 0
+        self.no_think = False  # one reply without reasoning (forced edit, or after a reply cut by thinking)
         self.rates: list = []  # measured output tokens per second
 
     def think_tokens(self) -> int:
@@ -305,7 +307,13 @@ class Model:
             body["max_tokens"] = max(total, think + CALL_TOKENS_MIN)
         else:
             # the reasoning is returned so it can be handed back on the next call
-            body["reasoning"] = dict(MODEL_REASONING.get(model) or {"effort": self.effort, "context": "all_turns"})
+            if self.no_think:
+                # an edit must come out now: thinking would use up the whole reply
+                body["reasoning"] = {"effort": "none"}
+            elif model in MODEL_REASONING and MODEL_REASONING[model] is None:
+                body.pop("reasoning", None)
+            else:
+                body["reasoning"] = dict(MODEL_REASONING.get(model) or {"effort": self.effort, "context": "all_turns"})
             body["temperature"] = DRIVER_TEMPERATURE
             body["seed"] = REQUEST_SEED
             route = PROVIDER_ROUTES.get(model)
@@ -1311,6 +1319,7 @@ class Agent:
                                                                    or elapsed >= FORCE_EDIT_SHARE):
                 self.pass_note += 1
                 tools = [t for t in TOOLS if t["function"]["name"] == "edit_file"]
+                self.model.no_think = True
                 say("[FORCE-EDIT] edit tools only for this call")
                 messages.append({"role": "user", "content": "Without further exploration, make your fix now with one "
                                  "targeted edit_file call (a few lines of old_text and new_text, not a whole file), based "
@@ -1335,6 +1344,9 @@ class Agent:
                 say("[LOOP] %s" % stop)
                 return
             calls = [c for c in (reply.get("tool_calls") or []) if isinstance(c, dict)]
+            self.model.no_think = bool(reply.get("_finish") == "length" and not calls)
+            if self.model.no_think:
+                say("[NO-THINK] reply used up by thinking with no tool call: next reply without reasoning")
             entry = {"role": "assistant", "content": reply.get("content") or ""}
             if reply.get("reasoning_details"):
                 entry["reasoning_details"] = reply["reasoning_details"]
