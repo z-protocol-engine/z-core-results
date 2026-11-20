@@ -188,3 +188,37 @@ Rejoué sur tous les patchs enregistrés : il signale 16 runs ratés et **0 des 
 - **20428 résolu en s2 :** correction de `Expression.__bool__`, le test de nullité du domaine EX. Les `strip` ajoutés en aval ont ensuite été retirés.
   - Dans les 5 autres runs, le contrôle s'est déclenché 4 fois, et le modèle a chaque fois justifié son `strip` en aval.
 - **Réserve :** ces deux tâches ont servi à concevoir le contrôle et à écrire son message. Ce sont des résultats sur l'échantillon d'apprentissage, avec n=6.
+
+## Banc réel avec Ling (`inclusionai/ling-3.2-flash:free`, 0 $)
+
+Le proxy est verrouillé sur Ling : tout autre modèle reçoit une erreur 403. En cas de 429 de la file gratuite partagée, il relance environ toutes les 2 s, pendant 120 s au maximum. Limite normale de l'agent : 900 s.
+
+**A/B sur 6 tâches, un passage, version améliorée avant les correctifs ci-dessous :**
+
+| Tâche | agent41 | agent41_fast |
+|---|---|---|
+| 22914 | ✅ 545 s, 29 appels | ✅ 523 s, 27 appels |
+| 17139 | ✅ 796 s, 31 appels | ✅ 558 s, 23 appels |
+| 20590 | ✅ 674 s, 28 appels | ✅ 793 s, 35 appels |
+| 23950 | ✅ 738 s, 23 appels | ✅ 686 s, 21 appels |
+| 19783 | ✅ 807 s, 27 appels | ❌ aucune modification |
+| 20801 | ✅ 808 s, 25 appels | ✅ 705 s, 26 appels (avec les correctifs) |
+| **Total** | **6/6, moyenne 728 s / 27,2 appels** | **5/6, moyenne 679 s / 24,3 appels** |
+
+**19783 après correctifs : ✅ 655 s, 19 appels, F2P 2/2.**
+
+**Ce qui a été corrigé pour les modèles lents (Ling), au fil des diagnostics et des audits :**
+- **Avis de dernier passage, puis tours réservés à `edit_file`**, quand aucun fichier n'a été modifié : au 20e appel ou à 40 % du temps, puis 2 appels plus tard. Mécanisme repris de Z-CORE (`LAST_PASS_NOTE` / `SETTLE`).
+- **Taille de chaque réponse :**
+  - Elle est calculée pour tenir dans 35 % du temps restant, au débit le plus lent observé (Ling varie de 12 à 56 tokens/s).
+  - Un appel ne peut prendre plus de 40 % du temps restant. S'il expire, il est relancé sans réflexion.
+- **Réflexion :**
+  - Ling garde son raisonnement par défaut. Avec `enabled: true`, il réfléchissait environ 3 fois plus, et ses tours forcés se terminaient en réflexion pure, sans appel d'outil.
+  - `effort: none` est envoyé pour le tour forcé, pour la réponse qui suit l'avis de dernier passage, et après une réponse coupée par la réflexion.
+- **Outils :**
+  - `bash` accepte une liste de commandes, mais Ling ne l'utilise pas.
+  - Une recherche vide est signalée explicitement.
+  - Le temps restant est affiché en nombre de réponses.
+  - Les contrôles de fin sont exécutés juste après la première modification.
+
+**Réserve :** un seul passage par tâche, et la variance de Ling est forte (de 6 à 27 appels sur une même tâche). Un deuxième passage complet est nécessaire pour comparer de façon fiable.
