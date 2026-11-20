@@ -49,7 +49,7 @@ checks = {
     "empty grep hint": "no matches" in first_tool_result,
     "calls-left status line": "more replies at your pace" in first_tool_result,
     "last-pass notice fired": "[LAST-PASS]" in agent_log,
-    "edit-only turn offered": ["edit_file", "write_file"] in tools_per_call,
+    "edit-only turn offered": ["edit_file"] in tools_per_call,
     "normal tools before": len(tools_per_call[0]) > 2,
 }
 for name, ok in checks.items():

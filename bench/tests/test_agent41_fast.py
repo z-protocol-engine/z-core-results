@@ -183,3 +183,13 @@ def test_repair_notes():
     plain = ("diff --git a/m.py b/m.py\n--- a/m.py\n+++ b/m.py\n@@ -1,1 +1,1 @@\n"
              "-    return x + 1\n+    return x + 2\n")
     assert A.repair_notes(plain) == []
+
+
+def test_reply_tokens_follow_measured_speed():
+    m = A.Model(A.Budget())
+    assert m.time_tokens() == A.REPLY_TOKENS
+    m.rates = [30.0, 30.0, 30.0]
+    m.budget.deadline = A.time.time() + 100
+    assert m.time_tokens() == A.MIN_REPLY_TOKENS
+    m.budget.deadline = A.time.time() + 1000
+    assert 14000 <= m.time_tokens() <= 15000

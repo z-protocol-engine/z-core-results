@@ -36,6 +36,7 @@ CALL_MARGIN_SEC = 8.0
 SHORT_WINDOW_SEC = 420.0
 REVIEW_MIN_SEC = 1e9  # forced review round off (a41_norev: same solve rate, faster); kept for AGENT_OVERRIDES
 REPLY_TOKENS = 32000
+MIN_REPLY_TOKENS = 2000
 REPLY_TOKENS_SHORT = 32000
 THINK_TOKENS_MAX = 8000
 THINK_TOKENS_MIN = 1024
@@ -249,6 +250,7 @@ class Model:
         self.driver = DRIVER_MODEL
         self.guard_share = GUARD_SHARE
         self.route_failures = 0
+        self.rates: list = []  # measured output tokens per second
 
     def think_tokens(self) -> int:
         reply_price = PRICES.get(self.driver, (2e-6, 8e-6))[1]
@@ -271,6 +273,13 @@ class Model:
             affordable = max(affordable, min(RELIEF_TOKENS, roomy))
         return max(CALL_TOKENS_MIN, min(ceiling + THINK_TOKENS_MAX, affordable))
 
+    def time_tokens(self) -> int:
+        # a reply must fit in about half of the time left at the measured output speed (slow free models)
+        if len(self.rates) < 2:
+            return REPLY_TOKENS
+        rate = sorted(self.rates)[len(self.rates) // 2]
+        return max(MIN_REPLY_TOKENS, int(rate * max(0.0, self.budget.left()) * 0.5))
+
     def body(self, messages: list, tools: list, model: str) -> dict:
         body = {
             "model": model,
@@ -278,7 +287,8 @@ class Model:
                          else for_model(messages, model)),
             "tools": tools,
             "tool_choice": "auto",
-            "max_tokens": min(self.call_tokens(), REPLY_TOKENS_SHORT if self.budget.short() else REPLY_TOKENS),
+            "max_tokens": min(self.call_tokens(), REPLY_TOKENS_SHORT if self.budget.short() else REPLY_TOKENS,
+                              self.time_tokens()),
             "reasoning": {"effort": self.effort, "exclude": True},
             "usage": {"include": True},
         }
@@ -350,6 +360,9 @@ class Model:
                            self.budget.left(), choices[0].get("finish_reason"), usage.get("prompt_tokens"),
                            details.get("cached_tokens"), usage.get("completion_tokens")))
                     self.answered = True
+                    produced = int(usage.get("completion_tokens") or 0)
+                    if produced >= 50:
+                        self.rates.append(produced / max(0.5, time.time() - began))
                     if self.route_failures < PROVIDER_FALLBACK_AFTER:
                         self.route_failures = 0
                     message["_finish"] = choices[0].get("finish_reason") or ""
@@ -1280,11 +1293,12 @@ class Agent:
             elif not self.edited and 1 <= self.pass_note <= 2 and (turn >= self.pass_turn + FORCE_EDIT_AFTER
                                                                    or elapsed >= FORCE_EDIT_SHARE):
                 self.pass_note += 1
-                tools = [t for t in TOOLS if t["function"]["name"] in ("edit_file", "write_file")]
+                tools = [t for t in TOOLS if t["function"]["name"] == "edit_file"]
                 say("[FORCE-EDIT] edit tools only for this call")
-                messages.append({"role": "user", "content": "Without further exploration, make your fix now with edit_file "
-                                 "or write_file, based on what you have already read. Only those tools are available "
-                                 "for this reply. %s" % self.status_line()})
+                messages.append({"role": "user", "content": "Without further exploration, make your fix now with one "
+                                 "targeted edit_file call (a few lines of old_text and new_text, not a whole file), based "
+                                 "on what you have already read. Think briefly; only edit_file is available for this "
+                                 "reply. %s" % self.status_line()})
             self.shrink(messages)
             try:
                 reply = self.model.ask(messages, tools)
