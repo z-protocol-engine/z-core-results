@@ -68,13 +68,20 @@ class Handler(BaseHTTPRequestHandler):
                                          method="POST" if data is not None else "GET")
         began = time.time()
         status, payload = 0, b""
-        try:
-            with OPENER.open(request, timeout=900) as response:
-                status, payload = response.status, response.read()
-        except urllib.error.HTTPError as error:
-            status, payload = error.code, error.read()
-        except Exception as error:
-            status, payload = 502, json.dumps({"error": {"message": "%s: %s" % (type(error).__name__, error)}}).encode()
+        wait_429 = float(os.environ.get("BENCH_RETRY_429_SEC") or 0)  # shared free pools: wait instead of failing
+        delay = 5.0
+        while True:
+            try:
+                with OPENER.open(request, timeout=900) as response:
+                    status, payload = response.status, response.read()
+            except urllib.error.HTTPError as error:
+                status, payload = error.code, error.read()
+            except Exception as error:
+                status, payload = 502, json.dumps({"error": {"message": "%s: %s" % (type(error).__name__, error)}}).encode()
+            if status != 429 or time.time() - began + delay > wait_429:
+                break
+            time.sleep(delay)
+            delay = min(delay * 1.5, 60.0)
         record = {"t": began, "sec": round(time.time() - began, 2), "status": status, "model": model, "path": rest}
         try:
             reply = json.loads(payload)

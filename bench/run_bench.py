@@ -26,6 +26,7 @@ PORT = int(os.environ.get("BENCH_PORT", "8765"))
 UPLOAD = "/root/.claude/uploads/a63ec59c-ecd4-5293-81db-49757466a820/ed18c4e8-agentcon41.py"
 
 LUNA = "openai/gpt-6-luna"
+LING = "inclusionai/ling-3.2-flash:free"
 VARIANTS = {
     # agent 41 unchanged except every model forced to luna (luna only: no Sonnet, no Haiku)
     "a41_luna": {"file": os.path.join(HERE, "agents", "agent41.py"),
@@ -37,6 +38,12 @@ VARIANTS = {
     "a41_look": {"file": os.path.join(HERE, "agents", "agent41_fast.py"),
                  "overrides": {"REVIEW_MIN_SEC": 1e9}},
     "zcore": {"file": "/home/user/ridges/agent.py", "overrides": {}},
+    # free Ling model (0 $): original agent 41 vs our upgrade, same model everywhere
+    "ling_41": {"file": os.path.join(HERE, "agents", "agent41.py"),
+                "overrides": {"DRIVER_MODEL": LING, "SECOND_LOOK_MODEL": LING, "RELIEF_MODEL": LING,
+                              "PRICES": {LING: (1e-12, 1e-12)}}},
+    "ling_fast": {"file": os.path.join(HERE, "agents", "agent41_fast.py"),
+                  "overrides": {"DRIVER_MODEL": LING, "RELIEF_MODEL": LING, "PRICES": {LING: (1e-12, 1e-12)}}},
 }
 
 
@@ -138,7 +145,7 @@ def run_one(run, variant, row):
             with open(os.path.join(out_dir, "agent.log"), "w") as log:
                 subprocess.run([sys.executable, os.path.join(HERE, "load_agent.py"), spec["file"],
                                 os.path.join(out_dir, "statement.txt"), os.path.join(out_dir, "agent.patch")],
-                               cwd=repo, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=2400)
+                               cwd=repo, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=float(os.environ.get("BENCH_AGENT_TIMEOUT") or 2400))
         except subprocess.TimeoutExpired:
             record["killed"] = True
         agent_sec = time.time() - began
