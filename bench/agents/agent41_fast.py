@@ -754,7 +754,11 @@ class Shell:
 TOOLS = [
     {"type": "function", "function": {
         "name": "bash",
-        "description": "Run a shell command in the working directory (bash -lc). Output is truncated. Use background=true for long builds or servers and read them with check_job.",
+        "description": ("Run a shell command in the working directory (bash -lc). Output is truncated. Use background=true "
+                        "for long builds or servers and read them with check_job. Every call costs a slow model round "
+                        "trip, so do as much as possible in one command: chain related steps with ; or && and label "
+                        "each part with echo (e.g. grep for a name, then sed -n the matching region of each file; or "
+                        "run the reproduction, the relevant tests and git diff together)."),
         "parameters": {"type": "object", "properties": {
             "command": {"type": "string"},
             "timeout": {"type": "number", "description": "seconds (not milliseconds), default 120"},
