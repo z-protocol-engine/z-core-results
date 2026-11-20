@@ -54,6 +54,8 @@ OUTPUT_CAP = 12000
 READ_CAP = 30000
 READ_BYTES_CAP = 5 * 1024 * 1024
 TRANSCRIPT_CAP = 600000
+# per-model reasoning request; default {"effort": <level>, "context": "all_turns"} (luna)
+MODEL_REASONING = {"inclusionai/ling-3.2-flash:free": {"enabled": True}}
 SHRINK_TO = 0.6
 COMMAND_CEILING_SEC = 300.0
 COMMAND_SHARE = 0.3
@@ -290,7 +292,7 @@ class Model:
             body["max_tokens"] = max(total, think + CALL_TOKENS_MIN)
         else:
             # the reasoning is returned so it can be handed back on the next call
-            body["reasoning"] = {"effort": self.effort, "context": "all_turns"}
+            body["reasoning"] = dict(MODEL_REASONING.get(model) or {"effort": self.effort, "context": "all_turns"})
             body["temperature"] = DRIVER_TEMPERATURE
             body["seed"] = REQUEST_SEED
             route = PROVIDER_ROUTES.get(model)
@@ -848,6 +850,8 @@ Way of working:
    locations exactly. If the task gives example inputs or a check command, run them. Fix and re-check.
 6. When everything is in place and checked, call finish.
 
+Each model call is slow, so make every reply count: issue all the independent tool calls you can in one reply
+(read several files, run several searches or checks at once) instead of one call per reply.
 Keep each reply short: write a long file in several parts (create it, then append) rather than in one huge reply.
 Be efficient: batch independent tool calls in one reply, keep command output short (head, tail, grep), and do not
 repeat work. Time left and budget are shown to you; leave time to check your result before the clock runs out.

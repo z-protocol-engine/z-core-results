@@ -43,7 +43,8 @@ VARIANTS = {
                 "overrides": {"DRIVER_MODEL": LING, "SECOND_LOOK_MODEL": LING, "RELIEF_MODEL": LING,
                               "PRICES": {LING: (1e-12, 1e-12)}}},
     "ling_fast": {"file": os.path.join(HERE, "agents", "agent41_fast.py"),
-                  "overrides": {"DRIVER_MODEL": LING, "RELIEF_MODEL": LING, "PRICES": {LING: (1e-12, 1e-12)}}},
+                  "overrides": {"DRIVER_MODEL": LING, "RELIEF_MODEL": LING, "PRICES": {LING: (1e-12, 1e-12)},
+                                "TRANSCRIPT_CAP": 200000}},
 }
 
 
