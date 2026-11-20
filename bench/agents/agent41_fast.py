@@ -279,8 +279,8 @@ class Model:
         # a reply must fit in about half of the time left at the measured output speed (slow free models)
         if len(self.rates) < 2:
             return REPLY_TOKENS
-        rate = sorted(self.rates)[len(self.rates) // 2]
-        return max(MIN_REPLY_TOKENS, int(rate * max(0.0, self.budget.left()) * 0.5))
+        rate = sorted(self.rates)[len(self.rates) // 4]  # slow end of the observed speeds
+        return max(MIN_REPLY_TOKENS, int(rate * max(0.0, self.budget.left()) * 0.35))
 
     def body(self, messages: list, tools: list, model: str) -> dict:
         body = {
@@ -347,7 +347,9 @@ class Model:
                 try:
                     request = urllib.request.Request(base + "/chat/completions", data=payload, headers=headers)
                     began = time.time()
-                    with urllib.request.urlopen(request, timeout=min(room, CALL_TIMEOUT_SEC)) as response:
+                    # one slow or stuck reply must not take the whole clock: at most 40% of the time left
+                    call_limit = min(room, CALL_TIMEOUT_SEC, max(90.0, 0.4 * self.budget.left()))
+                    with urllib.request.urlopen(request, timeout=call_limit) as response:
                         reply = json.loads(response.read().decode("utf-8", "replace"))
                     if base != self.bases[0]:
                         self.bases.remove(base)
@@ -414,6 +416,10 @@ class Model:
                 except Exception as error:
                     # any transport fault (timeouts, cut-off replies, bad JSON) is retried, never fatal
                     last = "%s: %s" % (type(error).__name__, str(error)[:200])
+                    if isinstance(error, TimeoutError) or "timed out" in str(error):
+                        # a reply that took too long is retried short: no thinking, smaller cap
+                        self.no_think = True
+                        payload = json.dumps(self.body(messages, tools, model)).encode("utf-8")
                 say("[MODEL] %s via %s" % (last, base))
             time.sleep(min(3.0 * 2 ** attempt, 15.0, max(0.0, self.budget.left() - 30)))
         raise OutOfRoom("model unavailable: " + last)
@@ -1311,6 +1317,7 @@ class Agent:
                 self.pass_note = 1
                 self.pass_turn = turn
                 say("[LAST-PASS] no file changed after %d calls (%.0f%% of the time)" % (turn - 1, 100 * elapsed))
+                self.model.no_think = True
                 messages.append({"role": "user", "content": "The exploration allowance is nearly used and nothing in %s "
                                  "has changed yet. Use at most one more read or command, then write your best fix with "
                                  "edit_file or write_file in your next reply. A partial fix can be refined afterwards; an "

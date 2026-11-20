@@ -192,7 +192,7 @@ def test_reply_tokens_follow_measured_speed():
     m.budget.deadline = A.time.time() + 100
     assert m.time_tokens() == A.MIN_REPLY_TOKENS
     m.budget.deadline = A.time.time() + 1000
-    assert 14000 <= m.time_tokens() <= 15000
+    assert 10000 <= m.time_tokens() <= 11000
 
 
 def test_reasoning_per_model_and_no_think():
