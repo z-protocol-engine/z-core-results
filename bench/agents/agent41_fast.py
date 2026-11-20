@@ -56,7 +56,7 @@ READ_BYTES_CAP = 5 * 1024 * 1024
 TRANSCRIPT_CAP = 600000
 # no file changed yet: last-pass notice, then edit-only turns (Z-CORE agent.py LAST_PASS_NOTE / SETTLE)
 LAST_PASS_TURN, LAST_PASS_SHARE = 20, 0.40
-FORCE_EDIT_TURN, FORCE_EDIT_SHARE = 28, 0.60
+FORCE_EDIT_AFTER, FORCE_EDIT_SHARE = 2, 0.60  # replies after the notice / share of the clock
 # per-model reasoning request; default {"effort": <level>, "context": "all_turns"} (luna)
 MODEL_REASONING = {"inclusionai/ling-3.2-flash:free": {"enabled": True}}
 SHRINK_TO = 0.6
@@ -887,6 +887,7 @@ class Agent:
         self.examined = False
         self.edited = False
         self.pass_note = 0
+        self.pass_turn = 0
         self.repaired = False
         self.money_wrapped = 0
         self.scratch = outside_scratch(root)
@@ -1270,12 +1271,14 @@ class Agent:
             elapsed = 1.0 - left / window
             if not self.edited and self.pass_note == 0 and (turn > LAST_PASS_TURN or elapsed >= LAST_PASS_SHARE):
                 self.pass_note = 1
+                self.pass_turn = turn
                 say("[LAST-PASS] no file changed after %d calls (%.0f%% of the time)" % (turn - 1, 100 * elapsed))
                 messages.append({"role": "user", "content": "The exploration allowance is nearly used and nothing in %s "
                                  "has changed yet. Use at most one more read or command, then write your best fix with "
                                  "edit_file or write_file in your next reply. A partial fix can be refined afterwards; an "
                                  "empty result scores zero. %s" % (self.root, self.status_line())})
-            elif not self.edited and 1 <= self.pass_note <= 2 and (turn > FORCE_EDIT_TURN or elapsed >= FORCE_EDIT_SHARE):
+            elif not self.edited and 1 <= self.pass_note <= 2 and (turn >= self.pass_turn + FORCE_EDIT_AFTER
+                                                                   or elapsed >= FORCE_EDIT_SHARE):
                 self.pass_note += 1
                 tools = [t for t in TOOLS if t["function"]["name"] in ("edit_file", "write_file")]
                 say("[FORCE-EDIT] edit tools only for this call")
