@@ -54,6 +54,9 @@ OUTPUT_CAP = 12000
 READ_CAP = 30000
 READ_BYTES_CAP = 5 * 1024 * 1024
 TRANSCRIPT_CAP = 600000
+# no file changed yet: last-pass notice, then edit-only turns (Z-CORE agent.py LAST_PASS_NOTE / SETTLE)
+LAST_PASS_TURN, LAST_PASS_SHARE = 20, 0.40
+FORCE_EDIT_TURN, FORCE_EDIT_SHARE = 28, 0.60
 # per-model reasoning request; default {"effort": <level>, "context": "all_turns"} (luna)
 MODEL_REASONING = {"inclusionai/ling-3.2-flash:free": {"enabled": True}}
 SHRINK_TO = 0.6
@@ -761,8 +764,11 @@ TOOLS = [
                         "run the reproduction, the relevant tests and git diff together)."),
         "parameters": {"type": "object", "properties": {
             "command": {"type": "string"},
+            "commands": {"type": "array", "items": {"type": "string"},
+                         "description": "several independent commands run in order in this one call, each with its own "
+                                        "labelled output (use instead of separate calls)"},
             "timeout": {"type": "number", "description": "seconds (not milliseconds), default 120"},
-            "background": {"type": "boolean"}}, "required": ["command"]}}},
+            "background": {"type": "boolean"}}}}},
     {"type": "function", "function": {
         "name": "check_job",
         "description": "Read the output of a background job, optionally waiting up to wait seconds.",
@@ -879,6 +885,8 @@ class Agent:
         self.traced = False
         self.hooked = False
         self.examined = False
+        self.edited = False
+        self.pass_note = 0
         self.repaired = False
         self.money_wrapped = 0
         self.scratch = outside_scratch(root)
@@ -892,12 +900,22 @@ class Agent:
 
     def tool(self, name: str, args: dict) -> str:
         if name == "bash":
+            commands = [str(c) for c in (args.get("commands") or []) if str(c).strip()]
             command = str(args.get("command") or "")
-            if not command.strip():
+            if command.strip():
+                commands.insert(0, command)
+            if not commands:
                 return "error: empty command"
             if args.get("background"):
-                return self.shell.start(command)
-            return self.shell.run(command, float(args.get("timeout") or 120))
+                return self.shell.start(commands[0])
+            parts = []
+            for c in commands[:8]:
+                out = self.shell.run(c, float(args.get("timeout") or 120))
+                if out.strip().endswith("[exit code 1]") and not out.strip()[:-len("[exit code 1]")].strip() and \
+                        re.match(r"\s*(?:cd [^;&]+(?:;|&&)\s*)?(?:grep|rg|git grep|egrep)\b", c):
+                    out += " (no matches: nothing here matches this pattern; do not repeat this search)"
+                parts.append(out if len(commands) == 1 else "=== $ %s\n%s" % (clip(c, 200), clip(out, OUTPUT_CAP // len(commands[:8]))))
+            return "\n".join(parts)
         if name == "check_job":
             return self.shell.check(str(args.get("job") or ""), float(args.get("wait") or 0))
         if name == "read_file":
@@ -922,6 +940,7 @@ class Agent:
                 return "error: %s" % error
             if args.get("append"):
                 return "appended to %s" % path
+            self.edited = True
             return "wrote %s" % path + self.syntax_note(path)
         if name == "edit_file":
             path = self.resolve(args.get("path"))
@@ -936,6 +955,7 @@ class Agent:
                 return "error: " + note + ". Nothing was changed."
             with open(path, "w", errors="surrogateescape", newline="") as handle:
                 handle.write(result)
+            self.edited = True
             return "edited %s" % path + note + self.syntax_note(path)
         if name == "view_file":
             return self.view_file(self.resolve(args.get("path")))
@@ -1203,7 +1223,10 @@ class Agent:
                 return
 
     def status_line(self) -> str:
-        return "[time left %.0fs, budget left $%.3f]" % (self.budget.left(), self.budget.money_left())
+        calls = max(1, self.budget.calls)
+        pace = (time.time() - self.budget.started) / calls
+        return "[time left %.0fs = about %d more replies at your pace of %.0fs each, budget left $%.3f]" % (
+            self.budget.left(), max(0, int(self.budget.left() // max(1.0, pace))), pace, self.budget.money_left())
 
     def run(self) -> None:
         listing = self.shell.run("pwd; ls -la | head -50; git status --short | head -20", 30)
@@ -1243,9 +1266,25 @@ class Agent:
                 self.wrapped = 2
                 messages.append({"role": "user", "content": "Almost out of time %s. Save what you have in place now "
                                  "and call finish." % self.status_line()})
+            tools = TOOLS
+            elapsed = 1.0 - left / window
+            if not self.edited and self.pass_note == 0 and (turn > LAST_PASS_TURN or elapsed >= LAST_PASS_SHARE):
+                self.pass_note = 1
+                say("[LAST-PASS] no file changed after %d calls (%.0f%% of the time)" % (turn - 1, 100 * elapsed))
+                messages.append({"role": "user", "content": "The exploration allowance is nearly used and nothing in %s "
+                                 "has changed yet. Use at most one more read or command, then write your best fix with "
+                                 "edit_file or write_file in your next reply. A partial fix can be refined afterwards; an "
+                                 "empty result scores zero. %s" % (self.root, self.status_line())})
+            elif not self.edited and 1 <= self.pass_note <= 2 and (turn > FORCE_EDIT_TURN or elapsed >= FORCE_EDIT_SHARE):
+                self.pass_note += 1
+                tools = [t for t in TOOLS if t["function"]["name"] in ("edit_file", "write_file")]
+                say("[FORCE-EDIT] edit tools only for this call")
+                messages.append({"role": "user", "content": "Without further exploration, make your fix now with edit_file "
+                                 "or write_file, based on what you have already read. Only those tools are available "
+                                 "for this reply. %s" % self.status_line()})
             self.shrink(messages)
             try:
-                reply = self.model.ask(messages, TOOLS)
+                reply = self.model.ask(messages, tools)
             except ValueError:
                 for message in messages[2:-4]:
                     if message.get("role") == "tool":
